@@ -52,38 +52,54 @@ def test_anonymize_ndarray_iris():
 
 
 def test_anonymize_pandas_adult():
+    # Load the Adult dataset (Pandas format)
     (x_train, y_train), _ = get_adult_dataset_pd()
 
+    # Set k-anonymity level
     k = 100
+
+    # Define dataset features and quasi-identifiers
     features = ['age', 'workclass', 'education-num', 'marital-status', 'occupation', 'relationship', 'race', 'sex',
                 'capital-gain', 'capital-loss', 'hours-per-week', 'native-country']
-    QI = ['age', 'workclass', 'education-num', 'marital-status', 'occupation', 'relationship', 'race', 'sex',
-          'native-country']
-    categorical_features = ['workclass', 'marital-status', 'occupation', 'relationship', 'race', 'sex',
-                            'native-country']
-    # prepare data for DT
+    QI = ['age', 'workclass', 'education-num', 'marital-status', 'occupation', 'relationship', 'race', 'sex', 'native-country']
+    categorical_features = ['workclass', 'marital-status', 'occupation', 'relationship', 'race', 'sex', 'native-country']
+
+    # Preprocessing: Handle missing values for numerical features
     numeric_features = [f for f in features if f not in categorical_features]
-    numeric_transformer = Pipeline(
-        steps=[('imputer', SimpleImputer(strategy='constant', fill_value=0))]
-    )
+    numeric_transformer = Pipeline(steps=[('imputer', SimpleImputer(strategy='constant', fill_value=0))])
+
+    # Preprocessing: Convert categorical features into numerical format using one-hot encoding
     categorical_transformer = OneHotEncoder(handle_unknown="ignore", sparse=False)
+
+    # Apply transformations to categorical and numeric features
     preprocessor = ColumnTransformer(
         transformers=[
             ("num", numeric_transformer, numeric_features),
             ("cat", categorical_transformer, categorical_features),
         ]
     )
+
+    # Transform input features
     encoded = preprocessor.fit_transform(x_train)
+
+    # Train a Decision Tree classifier
     model = DecisionTreeClassifier()
     model.fit(encoded, y_train)
-    pred = model.predict(encoded)
+    pred = model.predict(encoded)  # Generate predictions
 
+    # Apply k-anonymization
     anonymizer = Anonymize(k, QI, categorical_features=categorical_features)
     anon = anonymizer.anonymize(ArrayDataset(x_train, pred, features))
 
+    # Ensure that unique QI combinations are reduced
     assert (anon.loc[:, QI].drop_duplicates().shape[0] < x_train.loc[:, QI].drop_duplicates().shape[0])
+
+    # Verify that each group has at least 'k' samples
     assert (anon.loc[:, QI].value_counts().min() >= k)
+
+    # Ensure that non-QI features remain unchanged
     np.testing.assert_array_equal(anon.drop(QI, axis=1), x_train.drop(QI, axis=1))
+
 
 
 def test_anonymize_pandas_nursery():
