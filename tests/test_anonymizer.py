@@ -103,36 +103,70 @@ def test_anonymize_pandas_adult():
 
 
 def test_anonymize_pandas_nursery():
+    # Load the Nursery dataset (Pandas format)
     (x_train, y_train), _ = get_nursery_dataset_pd()
+
+    # Convert all feature values to strings (ensuring categorical consistency)
     x_train = x_train.astype(str)
 
+    # Define k-anonymity level (ensuring that each quasi-identifier group has at least 'k' records)
     k = 100
+
+    # Define all available features in the dataset
     features = ["parents", "has_nurs", "form", "children", "housing", "finance", "social", "health"]
+
+    # Define quasi-identifiers (QI) that will be anonymized
     QI = ["finance", "social", "health"]
-    categorical_features = ["parents", "has_nurs", "form", "housing", "finance", "social", "health", 'children']
-    # prepare data for DT
+
+    # Define categorical features in the dataset
+    categorical_features = ["parents", "has_nurs", "form", "housing", "finance", "social", "health", "children"]
+
+    # Identify numerical features (those not listed as categorical)
     numeric_features = [f for f in features if f not in categorical_features]
+
+    # Preprocessing step for numerical features: Fill missing values with a constant value (0)
     numeric_transformer = Pipeline(
         steps=[('imputer', SimpleImputer(strategy='constant', fill_value=0))]
     )
+
+    # Preprocessing step for categorical features: Convert them to numerical format using one-hot encoding
     categorical_transformer = OneHotEncoder(handle_unknown="ignore", sparse=False)
+
+    # Apply transformations: Numerical features are imputed, categorical features are one-hot encoded
     preprocessor = ColumnTransformer(
         transformers=[
-            ("num", numeric_transformer, numeric_features),
-            ("cat", categorical_transformer, categorical_features),
+            ("num", numeric_transformer, numeric_features),  # Apply numeric processing
+            ("cat", categorical_transformer, categorical_features),  # Apply categorical processing
         ]
     )
+
+    # Transform the dataset (convert categorical features to numerical format)
     encoded = preprocessor.fit_transform(x_train)
+
+    # Train a Decision Tree classifier on the transformed dataset
     model = DecisionTreeClassifier()
     model.fit(encoded, y_train)
+
+    # Generate predictions from the trained model
     pred = model.predict(encoded)
 
+    # Initialize the anonymizer with k-anonymity, targeting the selected quasi-identifiers
     anonymizer = Anonymize(k, QI, categorical_features=categorical_features, train_only_QI=True)
+
+    # Apply anonymization: Generalizing quasi-identifiers while preserving model output
     anon = anonymizer.anonymize(ArrayDataset(x_train, pred))
 
+    # **Assertions: Verify Anonymization is Working Correctly**
+
+    # Check that the number of unique quasi-identifier groups is reduced after anonymization
     assert (anon.loc[:, QI].drop_duplicates().shape[0] < x_train.loc[:, QI].drop_duplicates().shape[0])
+
+    # Ensure that each quasi-identifier group has at least 'k' records (enforcing k-anonymity)
     assert (anon.loc[:, QI].value_counts().min() >= k)
+
+    # Validate that non-QI attributes remain unchanged after anonymization
     np.testing.assert_array_equal(anon.drop(QI, axis=1), x_train.drop(QI, axis=1))
+
 
 
 def test_regression():
