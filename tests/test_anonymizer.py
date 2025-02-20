@@ -21,20 +21,34 @@ from apt.utils.dataset_utils import get_iris_dataset_np, get_adult_dataset_pd, g
 from apt.utils.datasets import ArrayDataset  # Wrapper for structured dataset representation
 
 def test_anonymize_ndarray_iris():
+    # Load the Iris dataset (NumPy format)
     (x_train, y_train), _ = get_iris_dataset_np()
 
+    # Train a Decision Tree model on the dataset
     model = DecisionTreeClassifier()
     model.fit(x_train, y_train)
-    pred = model.predict(x_train)
+    pred = model.predict(x_train)  # Predict using the trained model
 
+    # Set k-anonymity level and quasi-identifiers (QI)
     k = 10
-    QI = [0, 2]
+    QI = [0, 2]  # Selecting the first and third features as quasi-identifiers
+
+    # Initialize the anonymizer with k-anonymity
     anonymizer = Anonymize(k, QI, train_only_QI=True)
+
+    # Apply anonymization to the dataset
     anon = anonymizer.anonymize(ArrayDataset(x_train, pred))
+
+    # Check that the number of unique QI values is reduced after anonymization
     assert (len(np.unique(anon[:, QI], axis=0)) < len(np.unique(x_train[:, QI], axis=0)))
+
+    # Check that each group contains at least 'k' samples
     _, counts_elements = np.unique(anon[:, QI], return_counts=True)
     assert (np.min(counts_elements) >= k)
+
+    # Ensure that only the QI columns are modified, while the rest remain the same
     assert ((np.delete(anon, QI, axis=1) == np.delete(x_train, QI, axis=1)).all())
+
 
 
 def test_anonymize_pandas_adult():
