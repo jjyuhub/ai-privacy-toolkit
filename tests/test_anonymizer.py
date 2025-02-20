@@ -365,69 +365,143 @@ def test_anonymize_pandas_one_hot():
 
 
 def test_anonymize_pytorch_multi_label_binary():
+    """
+    Test case for applying k-anonymization on a PyTorch multi-label binary classifier.
+    Ensures the anonymized dataset reduces unique quasi-identifier values while preserving data consistency.
+    """
+
+    # Define a PyTorch model for multi-label binary classification
     class multi_label_binary_model(nn.Module):
         def __init__(self, num_labels, num_features):
+            """
+            Initializes a simple feedforward neural network for multi-label binary classification.
+            Args:
+                num_labels (int): The number of output labels (classes).
+                num_features (int): The number of input features.
+            """
             super(multi_label_binary_model, self).__init__()
 
+            # First fully connected layer with 256 neurons and Tanh activation
             self.fc1 = nn.Sequential(
                 nn.Linear(num_features, 256),
-                nn.Tanh(), )
+                nn.Tanh(),
+            )
 
+            # Final classifier layer mapping from 256 neurons to output labels
             self.classifier1 = nn.Linear(256, num_labels)
 
         def forward(self, x):
-            return self.classifier1(self.fc1(x))
-            # missing sigmoid on each output
+            """
+            Forward pass of the model.
+            Args:
+                x (tensor): Input data.
+            Returns:
+                Tensor: Model predictions (logits).
+            """
+            return self.classifier1(self.fc1(x))  # Missing sigmoid activation for binary classification
 
+    # Define the Focal Loss function, useful for handling imbalanced datasets
     class FocalLoss(nn.Module):
         def __init__(self, gamma=2, alpha=0.5):
+            """
+            Initializes Focal Loss to focus on hard-to-classify samples.
+            Args:
+                gamma (float): Controls how much focus is given to hard-to-classify examples.
+                alpha (float): Balancing factor for positive and negative class weights.
+            """
             super(FocalLoss, self).__init__()
             self.gamma = gamma
             self.alpha = alpha
 
         def forward(self, input, target):
+            """
+            Computes Focal Loss.
+            Args:
+                input (tensor): Model predictions (logits).
+                target (tensor): True labels.
+            Returns:
+                Tensor: Computed Focal Loss.
+            """
+            # Compute standard Binary Cross-Entropy (BCE) loss
             bce_loss = functional.binary_cross_entropy_with_logits(input, target, reduction='none')
 
+            # Convert logits into probabilities using the sigmoid function
             p = sigmoid(input)
+
+            # Adjust probabilities based on target labels
             p = where(target >= 0.5, p, 1 - p)
 
+            # Apply Focal Loss adjustments: modulating factor reduces importance of easy examples
             modulating_factor = (1 - p) ** self.gamma
             alpha = self.alpha * target + (1 - self.alpha) * (1 - target)
-            focal_loss = alpha * modulating_factor * bce_loss
 
+            # Compute final Focal Loss value
+            focal_loss = alpha * modulating_factor * bce_loss
             return focal_loss.mean()
 
+    # Load the Iris dataset (NumPy format)
     (x_train, y_train), _ = get_iris_dataset_np()
 
-    # make multi-label binary
+    # Convert dataset to multi-label binary format by stacking the labels
     y_train = np.column_stack((y_train, y_train, y_train))
+
+    # Convert all labels greater than 1 into 1 (binary classification: 0 or 1)
     y_train[y_train > 1] = 1
 
+    # Initialize the multi-label binary classification model
     model = multi_label_binary_model(3, 4)
+
+    # Define Focal Loss as the loss function
     criterion = FocalLoss()
+
+    # Use RMSprop optimizer for updating model weights
     optimizer = optim.RMSprop(model.parameters(), lr=0.01)
 
-    art_model = PyTorchClassifier(model=model,
-                                  output_type=CLASSIFIER_MULTI_OUTPUT_BINARY_LOGITS,
-                                  loss=criterion,
-                                  optimizer=optimizer,
-                                  input_shape=(24,),
-                                  nb_classes=3)
-    art_model.fit(PytorchData(x_train.astype(np.float32), y_train.astype(np.float32)), save_entire_model=False,
-                  nb_epochs=10)
-    pred = art_model.predict(PytorchData(x_train.astype(np.float32), y_train.astype(np.float32)))
-    pred = expit(pred)
-    pred[pred < 0.5] = 0
-    pred[pred >= 0.5] = 1
+    # Wrap the model using the PyTorchClassifier utility for ART compatibility
+    art_model = PyTorchClassifier(
+        model=model,
+        output_type=CLASSIFIER_MULTI_OUTPUT_BINARY_LOGITS,  # Specifies the type of classifier
+        loss=criterion,  # Assigns Focal Loss function
+        optimizer=optimizer,  # Assigns RMSprop optimizer
+        input_shape=(24,),  # Defines the input feature shape
+        nb_classes=3  # Number of output labels
+    )
 
-    k = 10
-    QI = [0, 2]
+    # Convert dataset to PyTorch format and train the model for 10 epochs
+    art_model.fit(PytorchData(x_train.astype(np.float32), y_train.astype(np.float32)), save_entire_model=False, nb_epochs=10)
+
+    # Make predictions on the training dataset
+    pred = art_model.predict(PytorchData(x_train.astype(np.float32), y_train.astype(np.float32)))
+
+    # Apply the sigmoid function (expit) to convert logits to probabilities
+    pred = expit(pred)
+
+    # Convert probabilities into binary values (threshold at 0.5)
+    pred[pred < 0.5] = 0  # If probability is below 0.5, set to 0
+    pred[pred >= 0.5] = 1  # If probability is 0.5 or greater, set to 1
+
+    # Define k-anonymization parameters
+    k = 10  # Minimum number of records per anonymized group
+    QI = [0, 2]  # Quasi-identifiers (features that need anonymization)
+
+    # Initialize the anonymizer with specified k-anonymity parameters
     anonymizer = Anonymize(k, QI, train_only_QI=True)
+
+    # Apply anonymization to the dataset
     anon = anonymizer.anonymize(ArrayDataset(x_train, pred))
+
+    # Ensure that the number of unique quasi-identifier values decreases after anonymization
     assert (len(np.unique(anon[:, QI], axis=0)) < len(np.unique(x_train[:, QI], axis=0)))
+
+    # Count the occurrences of each unique quasi-identifier value after anonymization
     _, counts_elements = np.unique(anon[:, QI], return_counts=True)
+
+    # Verify that every anonymized group contains at least 'k' records
     assert (np.min(counts_elements) >= k)
+
+    # Ensure that non-quasi-identifier features remain unchanged
     assert ((np.delete(anon, QI, axis=1) == np.delete(x_train, QI, axis=1)).all())
+
 
 
 def test_errors():
