@@ -1,24 +1,24 @@
-import pytest
-import numpy as np
-import pandas as pd
-from sklearn.compose import ColumnTransformer
-from sklearn.impute import SimpleImputer
-from sklearn.pipeline import Pipeline
-from sklearn.tree import DecisionTreeClassifier, DecisionTreeRegressor
-from sklearn.preprocessing import OneHotEncoder
-from sklearn.datasets import load_diabetes
-from sklearn.model_selection import train_test_split
-from torch import nn, optim, sigmoid, where
-from torch.nn import functional
-from scipy.special import expit
+import pytest  # Pytest for unit testing
+import numpy as np  # NumPy for numerical computations
+import pandas as pd  # Pandas for data manipulation
+from sklearn.compose import ColumnTransformer  # Helps apply different preprocessing techniques to different columns
+from sklearn.impute import SimpleImputer  # Handles missing values
+from sklearn.pipeline import Pipeline  # For creating machine learning workflows
+from sklearn.tree import DecisionTreeClassifier, DecisionTreeRegressor  # Decision tree models for classification and regression
+from sklearn.preprocessing import OneHotEncoder  # Converts categorical features into numerical format
+from sklearn.datasets import load_diabetes  # Loads the diabetes dataset for regression testing
+from sklearn.model_selection import train_test_split  # Splits data into training and testing sets
+from torch import nn, optim, sigmoid, where, from_numpy  # PyTorch for deep learning models
+from torch.nn import functional  # PyTorch functional utilities
+from scipy.special import expit  # Sigmoid function for probability conversions
 
-from apt.utils.datasets.datasets import PytorchData
-from apt.utils.models import CLASSIFIER_MULTI_OUTPUT_BINARY_LOGITS
-from apt.utils.models.pytorch_model import PyTorchClassifier
-from apt.anonymization import Anonymize
-from apt.utils.dataset_utils import get_iris_dataset_np, get_adult_dataset_pd, get_nursery_dataset_pd
-from apt.utils.datasets import ArrayDataset
-
+# Import utilities from the `apt` library (Anonymization & Privacy Tools)
+from apt.utils.datasets.datasets import PytorchData  # Wrapper for PyTorch dataset
+from apt.utils.models import CLASSIFIER_MULTI_OUTPUT_BINARY_LOGITS  # Classification mode definition for multi-label binary classification
+from apt.utils.models.pytorch_model import PyTorchClassifier  # Wrapper for PyTorch-based classifiers
+from apt.anonymization import Anonymize  # Anonymization utility for generalizing data
+from apt.utils.dataset_utils import get_iris_dataset_np, get_adult_dataset_pd, get_nursery_dataset_pd  # Load datasets
+from apt.utils.datasets import ArrayDataset  # Wrapper for structured dataset representation
 
 def test_anonymize_ndarray_iris():
     (x_train, y_train), _ = get_iris_dataset_np()
