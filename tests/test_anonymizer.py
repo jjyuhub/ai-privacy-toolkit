@@ -170,23 +170,38 @@ def test_anonymize_pandas_nursery():
 
 
 def test_regression():
+    # Load the diabetes dataset and split into training/testing sets
     dataset = load_diabetes()
     x_train, x_test, y_train, y_test = train_test_split(dataset.data, dataset.target, test_size=0.5, random_state=14)
 
+    # Train a Decision Tree Regressor
     model = DecisionTreeRegressor(random_state=10, min_samples_split=2)
     model.fit(x_train, y_train)
-    pred = model.predict(x_train)
+    pred = model.predict(x_train)  # Get predictions
+
+    # Define k-anonymity and quasi-identifiers for anonymization
     k = 10
     QI = [0, 2, 5, 8]
+
+    # Apply anonymization to the dataset
     anonymizer = Anonymize(k, QI, is_regression=True, train_only_QI=True)
     anon = anonymizer.anonymize(ArrayDataset(x_train, pred))
+
+    # Evaluate the base model performance before and after anonymization
     print('Base model accuracy (R2 score): ', model.score(x_test, y_test))
-    model.fit(anon, y_train)
+    model.fit(anon, y_train)  # Retrain model on anonymized data
     print('Base model accuracy (R2 score) after anonymization: ', model.score(x_test, y_test))
+
+    # Ensure that QI uniqueness is reduced
     assert (len(np.unique(anon[:, QI], axis=0)) < len(np.unique(x_train[:, QI], axis=0)))
+
+    # Ensure that each group has at least 'k' samples
     _, counts_elements = np.unique(anon[:, QI], return_counts=True)
     assert (np.min(counts_elements) >= k)
+
+    # Ensure non-QI features remain unchanged
     assert ((np.delete(anon, QI, axis=1) == np.delete(x_train, QI, axis=1)).all())
+
 
 
 def test_anonymize_ndarray_one_hot():
