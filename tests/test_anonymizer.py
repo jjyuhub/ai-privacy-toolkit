@@ -284,38 +284,84 @@ def test_anonymize_ndarray_one_hot():
 
 
 def test_anonymize_pandas_one_hot():
+    """
+    Test function to apply k-anonymization to a Pandas dataset 
+    with one-hot encoded categorical features.
+    """
+
+    # Define the feature names for the dataset
     feature_names = ["age", "gender_M", "gender_F", "height"]
-    x_train = np.array([[23, 0, 1, 165],
-                        [45, 0, 1, 158],
-                        [56, 1, 0, 123],
-                        [67, 0, 1, 154],
-                        [45, 1, 0, 149],
-                        [42, 1, 0, 166],
-                        [73, 0, 1, 172],
-                        [94, 0, 1, 168],
-                        [69, 0, 1, 175],
-                        [24, 1, 0, 181],
-                        [18, 1, 0, 190]])
+
+    # Create a NumPy array representing the dataset (11 rows, 4 columns)
+    # Columns: Age (numeric), Gender_M (binary), Gender_F (binary), Height (numeric)
+    x_train = np.array([[23, 0, 1, 165],  # Row 1: 23 years, Female, 165cm
+                        [45, 0, 1, 158],  # Row 2: 45 years, Female, 158cm
+                        [56, 1, 0, 123],  # Row 3: 56 years, Male, 123cm
+                        [67, 0, 1, 154],  # Row 4: 67 years, Female, 154cm
+                        [45, 1, 0, 149],  # Row 5: 45 years, Male, 149cm
+                        [42, 1, 0, 166],  # Row 6: 42 years, Male, 166cm
+                        [73, 0, 1, 172],  # Row 7: 73 years, Female, 172cm
+                        [94, 0, 1, 168],  # Row 8: 94 years, Female, 168cm
+                        [69, 0, 1, 175],  # Row 9: 69 years, Female, 175cm
+                        [24, 1, 0, 181],  # Row 10: 24 years, Male, 181cm
+                        [18, 1, 0, 190]]) # Row 11: 18 years, Male, 190cm
+
+    # Create an array for the target labels (classification: binary 0/1)
     y_train = np.array([1, 1, 0, 1, 0, 0, 1, 1, 0, 1, 0])
+
+    # Convert the NumPy array into a Pandas DataFrame with column names
     x_train = pd.DataFrame(x_train, columns=feature_names)
+
+    # Convert y_train into a Pandas Series (to match the DataFrame structure)
     y_train = pd.Series(y_train)
 
+    # Initialize a Decision Tree classifier
     model = DecisionTreeClassifier()
+
+    # Train the Decision Tree model on the dataset
     model.fit(x_train, y_train)
+
+    # Generate predictions on the training set
     pred = model.predict(x_train)
 
+    # Define k-anonymization parameter (each group must have at least k=10 similar records)
     k = 10
+
+    # Define the quasi-identifiers (sensitive attributes that should be anonymized)
     QI = ["age", "gender_M", "gender_F"]
-    QI_slices = [["gender_M", "gender_F"]]
+
+    # Define groups of quasi-identifiers that should be generalized together
+    QI_slices = [["gender_M", "gender_F"]]  # Gender is one-hot encoded, so it should be treated as a single attribute
+
+    # Initialize the Anonymize class to apply k-anonymization
     anonymizer = Anonymize(k, QI, train_only_QI=True, quasi_identifer_slices=QI_slices)
+
+    # Apply anonymization to the dataset
     anon = anonymizer.anonymize(ArrayDataset(x_train, pred))
+
+    # **Assertions to verify correctness of anonymization process**
+
+    # Check that the number of unique values in the QI columns has been reduced after anonymization
     assert (anon.loc[:, QI].drop_duplicates().shape[0] < x_train.loc[:, QI].drop_duplicates().shape[0])
+
+    # Check that each anonymized group contains at least 'k' samples (ensuring k-anonymity)
     assert (anon.loc[:, QI].value_counts().min() >= k)
+
+    # Ensure that only the quasi-identifier columns have changed, while other features remain unchanged
     np.testing.assert_array_equal(anon.drop(QI, axis=1), x_train.drop(QI, axis=1))
+
+    # Extract the anonymized slice for the one-hot encoded gender column
     anonymized_slice = anon.loc[:, QI_slices[0]]
-    assert ((np.sum(anonymized_slice, axis=1) == 1).all())
+
+    # Ensure that the sum of the one-hot encoded gender columns equals 1 for all rows
+    assert ((np.sum(anonymized_slice, axis=1) == 1).all())  # Ensures a valid one-hot encoding
+
+    # Ensure that the maximum value in the one-hot encoded columns is 1 (no invalid values)
     assert ((np.max(anonymized_slice, axis=1) == 1).all())
+
+    # Ensure that the minimum value in the one-hot encoded columns is 0 (no invalid values)
     assert ((np.min(anonymized_slice, axis=1) == 0).all())
+
 
 
 def test_anonymize_pytorch_multi_label_binary():
