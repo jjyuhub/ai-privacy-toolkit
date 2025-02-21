@@ -35,10 +35,20 @@ from apt.anonymization import Anonymize
 from apt.utils.dataset_utils import get_adult_dataset_pd
 from apt.utils.datasets import ArrayDataset
 
+import numpy as np
+import pandas as pd
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.preprocessing import OneHotEncoder
+from sklearn.compose import ColumnTransformer
+from sklearn.pipeline import Pipeline
+from apt.anonymization import Anonymize
+from apt.utils.dataset_utils import get_adult_dataset_pd
+from apt.utils.datasets import ArrayDataset
+
 def test_feature_importance_shift():
     """
-    This test evaluates how k-anonymization impacts feature importance in a Decision Tree model.
-    The goal is to determine whether anonymization reduces the predictive power of key features.
+    Evaluates how k-anonymization affects feature importance in a Decision Tree model.
+    Fixes the issue by encoding categorical features before training.
     """
 
     print("\n===== STARTING TEST: Feature Importance Shift Due to Anonymization =====\n")
@@ -47,77 +57,106 @@ def test_feature_importance_shift():
     print("[Step 1] Loading the Adult dataset...")
     (x_train, y_train), _ = get_adult_dataset_pd()
     feature_names = x_train.columns.tolist()
-    
+
     print(f" - Number of records: {x_train.shape[0]}")
     print(f" - Number of features: {len(feature_names)}")
     print(f" - Feature Names: {feature_names}\n")
 
-    # Step 2: Train Initial Decision Tree
-    print("[Step 2] Training Decision Tree Classifier on the original dataset...")
+    # Identify categorical and numerical features
+    categorical_features = x_train.select_dtypes(include=['object']).columns.tolist()
+    numerical_features = x_train.select_dtypes(exclude=['object']).columns.tolist()
+
+    print(f" - Categorical Features: {categorical_features}")
+    print(f" - Numerical Features: {numerical_features}\n")
+
+    # Step 2: Preprocess Data (One-Hot Encode Categorical Features)
+    print("[Step 2] Applying One-Hot Encoding to categorical features...")
+
+    preprocessor = ColumnTransformer(
+        transformers=[
+            ('num', 'passthrough', numerical_features),  # Keep numerical features as-is
+            ('cat', OneHotEncoder(handle_unknown='ignore', sparse=False), categorical_features)  # One-hot encode categorical features
+        ]
+    )
+
+    # Apply transformation
+    x_train_encoded = preprocessor.fit_transform(x_train)
+
+    # Get updated feature names after encoding
+    encoded_feature_names = (
+        numerical_features +
+        list(preprocessor.named_transformers_['cat'].get_feature_names_out(categorical_features))
+    )
+
+    print(f" - Transformed dataset has {x_train_encoded.shape[1]} features after encoding.\n")
+
+    # Step 3: Train Initial Decision Tree
+    print("[Step 3] Training Decision Tree Classifier on the original dataset...")
     model = DecisionTreeClassifier(random_state=42)
-    model.fit(x_train, y_train)
-    
+    model.fit(x_train_encoded, y_train)
+
     # Extract feature importance before anonymization
-    print("\n[Step 3] Extracting Feature Importance before Anonymization...")
     feature_importance_before = model.feature_importances_
-    
+
     importance_df_before = pd.DataFrame({
-        'Feature': feature_names,
+        'Feature': encoded_feature_names,
         'Importance': feature_importance_before
     }).sort_values(by="Importance", ascending=False)
-    
+
     print("\nTop 10 Features Before Anonymization:")
     print(importance_df_before.head(10).to_string(index=False))
-    
+
     # Step 4: Apply k-Anonymization (k=10)
     print("\n[Step 4] Applying k-Anonymization (k=10) on quasi-identifiers...")
     k = 10  # Minimum number of individuals per group
     quasi_identifiers = ["age", "education-num", "marital-status", "occupation"]
-    
+
     print(f" - Selected Quasi-Identifiers: {quasi_identifiers}")
     print(" - Applying anonymization...\n")
-    
+
     anonymizer = Anonymize(k, quasi_identifiers, categorical_features=quasi_identifiers)
     anonymized_data = anonymizer.anonymize(ArrayDataset(x_train, y_train, feature_names))
-    
+
+    # Apply same transformation to anonymized data
+    anonymized_encoded = preprocessor.transform(anonymized_data)
+
     # Step 5: Train Decision Tree on Anonymized Data
     print("[Step 5] Training Decision Tree Classifier on anonymized dataset...")
     model_after = DecisionTreeClassifier(random_state=42)
-    model_after.fit(anonymized_data, y_train)
-    
+    model_after.fit(anonymized_encoded, y_train)
+
     # Extract feature importance after anonymization
-    print("\n[Step 6] Extracting Feature Importance after Anonymization...")
     feature_importance_after = model_after.feature_importances_
-    
+
     importance_df_after = pd.DataFrame({
-        'Feature': feature_names,
+        'Feature': encoded_feature_names,
         'Importance': feature_importance_after
     }).sort_values(by="Importance", ascending=False)
-    
+
     print("\nTop 10 Features After Anonymization:")
     print(importance_df_after.head(10).to_string(index=False))
 
-    # Step 7: Analyze Feature Importance Shift
-    print("\n[Step 7] Comparing Feature Importance Shift Before and After Anonymization...")
+    # Step 6: Analyze Feature Importance Shift
+    print("\n[Step 6] Comparing Feature Importance Shift Before and After Anonymization...")
     comparison_df = importance_df_before.merge(importance_df_after, on="Feature", suffixes=("_Before", "_After"))
     comparison_df["Importance_Change"] = comparison_df["Importance_After"] - comparison_df["Importance_Before"]
-    
+
     # Sort by absolute importance change
     comparison_df = comparison_df.sort_values(by="Importance_Change", ascending=True)
-    
+
     print("\nFeatures with the Most Reduction in Importance:")
     print(comparison_df.head(10).to_string(index=False))
-    
+
     print("\nFeatures with the Most Increase in Importance:")
     print(comparison_df.tail(10).to_string(index=False))
 
-    # Step 8: Conclusion
-    print("\n[Step 8] Drawing Conclusions...")
+    # Step 7: Conclusion
+    print("\n[Step 7] Drawing Conclusions...")
     most_reduced_features = comparison_df.nsmallest(5, "Importance_Change")
     most_important_lost_feature = most_reduced_features.iloc[0]["Feature"]
-    
+
     print(f"\n✅ The most affected feature was: **{most_important_lost_feature}**, losing {most_reduced_features.iloc[0]['Importance_Change']:.4f} importance.")
-    
+
     if most_reduced_features["Importance_Change"].min() < -0.05:
         print("⚠️ Anonymization significantly reduced the importance of key predictive features.")
     else:
@@ -126,6 +165,7 @@ def test_feature_importance_shift():
     print("\n===== TEST COMPLETE: Feature Importance Shift Analysis Finished =====\n")
 
 
-# Run the test
+# Run the fixed test
 test_feature_importance_shift()
+
 
