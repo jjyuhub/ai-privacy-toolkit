@@ -20,100 +20,74 @@ from apt.anonymization import Anonymize  # Anonymization utility for generalizin
 from apt.utils.dataset_utils import get_iris_dataset_np, get_adult_dataset_pd, get_nursery_dataset_pd  # Load datasets
 from apt.utils.datasets import ArrayDataset  # Wrapper for structured dataset representation
 
+import numpy as np
+from apt.anonymization import Anonymize
+from apt.utils.dataset_utils import get_iris_dataset_np
+from apt.utils.datasets import ArrayDataset
+from sklearn.tree import DecisionTreeClassifier
+
 def test_anonymize_ndarray_iris():
     """
-    Test function for anonymizing the Iris dataset (NumPy format).
-    This test ensures that k-anonymization properly generalizes the selected quasi-identifiers (QI)
-    while maintaining data integrity for non-QI features.
-
-    The test follows these key steps:
-    1. Load the dataset
-    2. Train a Decision Tree model on the dataset
-    3. Predict labels using the trained model
-    4. Apply k-anonymization to generalize QI attributes
-    5. Verify that QI uniqueness is reduced
-    6. Ensure that each anonymized QI group has at least 'k' records
-    7. Confirm that non-QI features remain unchanged
+    Verbose test for anonymizing the Iris dataset.
+    Ensures each step prints information before assertions are checked.
     """
 
     # ---------------------- STEP 1: LOAD DATASET ----------------------
-    # Load the Iris dataset in NumPy format. 
-    # The dataset contains 150 samples with 4 features per sample.
-    # Features: [sepal length, sepal width, petal length, petal width]
+    print("\n[STEP 1] Loading Iris dataset...")  # Explicit step logging
     (x_train, y_train), _ = get_iris_dataset_np()
 
-    # Print dataset properties for debugging
-    print(f"Original Dataset Shape: {x_train.shape}")
-    print(f"First 5 Samples:\n{x_train[:5]}")
-    print(f"Unique Labels in Dataset: {np.unique(y_train)}")
+    print(f"  Dataset Shape: {x_train.shape}")  # (150, 4)
+    print(f"  First 5 Samples:\n{x_train[:5]}")  # Print example data
+    print(f"  Unique Labels: {np.unique(y_train)}\n")  # [0, 1, 2]
 
     # ---------------------- STEP 2: TRAIN DECISION TREE ----------------------
-    # Initialize a Decision Tree Classifier. This will be used to predict labels.
+    print("[STEP 2] Training Decision Tree Model...")
     model = DecisionTreeClassifier()
-
-    # Train the decision tree model on the entire dataset
     model.fit(x_train, y_train)
 
-    # ---------------------- STEP 3: PREDICT LABELS ----------------------
-    # Use the trained model to predict labels on the training data.
+    # Predict using the trained model
     pred = model.predict(x_train)
+    print(f"  First 5 Predictions: {pred[:5]}\n")
 
-    # Print first 5 predicted labels for verification
-    print(f"First 5 Predictions: {pred[:5]}")
+    # ---------------------- STEP 3: APPLY ANONYMIZATION ----------------------
+    print("[STEP 3] Applying Anonymization...")
+    k = 10  # Define k-anonymity level
+    QI = [0, 2]  # Define Quasi-Identifiers (QI): sepal length and petal length
 
-    # ---------------------- STEP 4: SET ANONYMIZATION PARAMETERS ----------------------
-    # Define the level of k-anonymity (minimum number of samples per group).
-    k = 10  # This means each anonymized group should contain at least 10 records.
+    print(f"  Unique QI Values Before Anonymization: {len(np.unique(x_train[:, QI], axis=0))}")
 
-    # Define which features should be considered quasi-identifiers (QI).
-    # Here, we choose the 1st (index 0) and 3rd (index 2) features.
-    QI = [0, 2]  # sepal length and petal length
-
-    # Print chosen QI feature statistics
-    print(f"Unique Values Before Anonymization for QI features: {len(np.unique(x_train[:, QI], axis=0))}")
-
-    # ---------------------- STEP 5: APPLY ANONYMIZATION ----------------------
-    # Initialize the anonymization process with k-anonymity enforcement.
+    # Initialize and apply anonymization
     anonymizer = Anonymize(k, QI, train_only_QI=True)
-
-    # Apply anonymization to the dataset.
     anon = anonymizer.anonymize(ArrayDataset(x_train, pred))
 
-    # Print first 5 rows after anonymization for verification
-    print(f"First 5 Samples After Anonymization:\n{anon[:5]}")
+    print(f"  First 5 Rows After Anonymization:\n{anon[:5]}\n")
 
-    # ---------------------- STEP 6: VERIFY ANONYMIZATION RESULTS ----------------------
+    # ---------------------- STEP 4: VALIDATE ANONYMIZATION ----------------------
+    print("[STEP 4] Validating Anonymization...")
 
-    # **Check 1: Ensure that QI uniqueness is reduced**
-    # Before anonymization, the number of unique QI combinations should be high.
-    # After anonymization, the number should be lower since some values will be grouped.
+    # Check that QI uniqueness is reduced
     unique_qi_before = len(np.unique(x_train[:, QI], axis=0))
     unique_qi_after = len(np.unique(anon[:, QI], axis=0))
 
-    print(f"Unique QI Values Before Anonymization: {unique_qi_before}")
-    print(f"Unique QI Values After Anonymization: {unique_qi_after}")
+    print(f"  Unique QI Values Before: {unique_qi_before}")
+    print(f"  Unique QI Values After: {unique_qi_after}")
+    assert unique_qi_after < unique_qi_before, "Anonymization did not reduce unique QI values!"
 
-    assert unique_qi_after < unique_qi_before, "Error: Anonymization did not reduce unique QI values!"
-
-    # **Check 2: Ensure that each anonymized group contains at least 'k' samples**
+    # Check that each group has at least 'k' records
     _, counts_elements = np.unique(anon[:, QI], return_counts=True)
 
-    # Print distribution of counts per unique group
-    print(f"Min group size after anonymization: {np.min(counts_elements)}")
-    print(f"All group sizes: {counts_elements}")
+    print(f"  Minimum group size after anonymization: {np.min(counts_elements)}")
+    print(f"  All group sizes: {counts_elements}")
+    assert np.min(counts_elements) >= k, "Some anonymized groups contain fewer than 'k' samples!"
 
-    # Check that no group has fewer than 'k' records
-    assert np.min(counts_elements) >= k, "Error: Some anonymized groups contain fewer than 'k' samples!"
-
-    # **Check 3: Ensure that only the QI columns were modified**
-    # The non-QI features should remain exactly the same as before.
+    # Ensure non-QI features remain unchanged
     non_qi_unchanged = (np.delete(anon, QI, axis=1) == np.delete(x_train, QI, axis=1)).all()
 
-    print(f"Non-QI Feature Integrity Check: {non_qi_unchanged}")
+    print(f"  Non-QI Feature Integrity Check: {non_qi_unchanged}")
+    assert non_qi_unchanged, "Non-QI features were modified!"
 
-    assert non_qi_unchanged, "Error: Non-QI features were modified during anonymization!"
+    print("\n✅ TEST PASSED: Anonymization applied correctly!\n")
 
-    print("✅ Test Passed: Anonymization properly generalized QI features while preserving non-QI attributes.")
 
 def test_anonymize_pandas_adult():
     # Load the Adult dataset (Pandas format)
