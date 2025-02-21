@@ -57,7 +57,6 @@ from apt.utils.datasets import ArrayDataset
 
 import numpy as np
 import pandas as pd
-from scipy.stats import ttest_rel, f_oneway
 from sklearn.tree import DecisionTreeClassifier
 from sklearn.preprocessing import OneHotEncoder
 from sklearn.compose import ColumnTransformer
@@ -65,13 +64,13 @@ from apt.anonymization import Anonymize
 from apt.utils.dataset_utils import get_adult_dataset_pd
 from apt.utils.datasets import ArrayDataset
 
-def test_feature_importance_shift_multiple_k_with_stats():
+def test_feature_importance_shift_multiple_k():
     """
     Compares feature importance shifts for k-anonymization with k=5, k=10, and k=100.
-    Uses T-Tests and ANOVA to assess statistical significance of feature importance shifts.
+    Ensures we observe the trade-off between privacy and model utility.
     """
 
-    print("\n===== STARTING TEST: Feature Importance Shift Across k-Values with Statistical Tests =====\n")
+    print("\n===== STARTING TEST: Feature Importance Shift Across k-Values =====\n")
 
     # Step 1: Load Dataset
     print("[Step 1] Loading the Adult dataset...")
@@ -124,7 +123,6 @@ def test_feature_importance_shift_multiple_k_with_stats():
 
     # Define k-values to test
     k_values = [5, 10, 100]
-    importance_results = {}
 
     # Iterate over different k-values
     for k in k_values:
@@ -174,37 +172,158 @@ def test_feature_importance_shift_multiple_k_with_stats():
         print(f"\nTop 10 Features After Anonymization (k={k}):")
         print(importance_df_after.head(10).to_string(index=False))
 
-        # Store results
-        importance_results[k] = feature_importance_after
+        # Step 6: Analyze Feature Importance Shift
+        print(f"\n[Step 6] Comparing Feature Importance Shift Before and After Anonymization (k={k})...")
+        comparison_df = importance_df_before.merge(importance_df_after, on="Feature", suffixes=("_Before", f"_After_k{k}"))
+        comparison_df[f"Importance_Change_k{k}"] = comparison_df[f"Importance_After_k{k}"] - comparison_df["Importance_Before"]
 
-    # Step 6: Statistical Significance Tests
-    print("\n===== Statistical Significance Analysis =====\n")
+        # Sort by absolute importance change
+        comparison_df = comparison_df.sort_values(by=f"Importance_Change_k{k}", ascending=True)
 
-    # Perform T-Test (paired) between original and each k-anonymized dataset
-    for k in k_values:
-        t_stat, p_value = ttest_rel(feature_importance_before, importance_results[k])
-        print(f"T-Test for k={k}: t-statistic={t_stat:.4f}, p-value={p_value:.4f}")
+        print(f"\nFeatures with the Most Reduction in Importance (k={k}):")
+        print(comparison_df.head(10).to_string(index=False))
 
-        if p_value < 0.05:
-            print(f"✅ Statistically Significant Change Detected for k={k} (p < 0.05)")
+        print(f"\nFeatures with the Most Increase in Importance (k={k}):")
+        print(comparison_df.tail(10).to_string(index=False))
+
+        # Step 7: Conclusion for this k-value
+        print(f"\n[Step 7] Drawing Conclusions for k={k}...")
+        most_reduced_features = comparison_df.nsmallest(5, f"Importance_Change_k{k}")
+        most_important_lost_feature = most_reduced_features.iloc[0]["Feature"]
+
+        print(f"\n✅ The most affected feature for k={k} was: **{most_important_lost_feature}**, losing {most_reduced_features.iloc[0][f'Importance_Change_k{k}']:.4f} importance.")
+
+        if most_reduced_features[f"Importance_Change_k{k}"].min() < -0.05:
+            print(f"⚠️ Anonymization (k={k}) significantly reduced the importance of key predictive features.")
         else:
-            print(f"⚠️ No Significant Change Detected for k={k} (p >= 0.05)")
+            print(f"✅ Anonymization (k={k}) had minimal impact on feature importance.")
 
-    # Perform ANOVA across different k-values
-    f_stat, anova_p_value = f_oneway(
-        feature_importance_before, importance_results[5], importance_results[10], importance_results[100]
+        print(f"\n===== TEST COMPLETE for k={k} =====\n")
+
+def test_model_accuracy_retention():
+    """
+    Compares model performance before and after k-anonymization at k=5, k=10, k=100.
+    Evaluates Accuracy, Precision, Recall, and F1-score across different models.
+    """
+
+    print("\n===== STARTING TEST: Model Accuracy Retention Across k-Values =====\n")
+
+    # Step 1: Load Dataset
+    print("[Step 1] Loading the Adult dataset...")
+    (x_train, y_train), (x_test, y_test) = get_adult_dataset_pd()
+    feature_names = x_train.columns.tolist()
+
+    # Identify categorical and numerical features
+    categorical_features = x_train.select_dtypes(include=['object']).columns.tolist()
+    numerical_features = x_train.select_dtypes(exclude=['object']).columns.tolist()
+
+    print(f" - Categorical Features: {categorical_features}")
+    print(f" - Numerical Features: {numerical_features}\n")
+
+    # Step 2: Preprocess Data (One-Hot Encoding)
+    print("[Step 2] Applying One-Hot Encoding to categorical features...")
+
+    preprocessor = ColumnTransformer(
+        transformers=[
+            ('num', 'passthrough', numerical_features),
+            ('cat', OneHotEncoder(handle_unknown='ignore', sparse=False), categorical_features)
+        ]
     )
 
-    print(f"\nANOVA Test Across k-values: F-statistic={f_stat:.4f}, p-value={anova_p_value:.4f}")
+    # Apply transformation
+    x_train_encoded = preprocessor.fit_transform(x_train)
+    x_test_encoded = preprocessor.transform(x_test)
 
-    if anova_p_value < 0.05:
-        print("✅ Statistically Significant Differences in Feature Importance Across k-values (p < 0.05)")
-    else:
-        print("⚠️ No Significant Differences Across k-values (p >= 0.05)")
+    # Get updated feature names after encoding
+    encoded_feature_names = (
+        numerical_features +
+        list(preprocessor.named_transformers_['cat'].get_feature_names_out(categorical_features))
+    )
 
-    print("\n===== TEST COMPLETE: Feature Importance Shift with Statistical Analysis =====\n")
+    print(f" - Transformed dataset has {x_train_encoded.shape[1]} features after encoding.\n")
 
+    # Define models for testing
+    models = {
+        "Decision Tree": DecisionTreeClassifier(random_state=42),
+        "Gradient Boosting": GradientBoostingClassifier(random_state=42),
+        "Neural Network": MLPClassifier(hidden_layer_sizes=(100,), max_iter=300, random_state=42)
+    }
 
+    # Train and evaluate models on original (non-anonymized) data
+    print("[Step 3] Evaluating models on original dataset...")
+    results = {"k-value": [], "Model": [], "Accuracy": [], "Precision": [], "Recall": [], "F1-Score": []}
+
+    for model_name, model in models.items():
+        model.fit(x_train_encoded, y_train)
+        y_pred = model.predict(x_test_encoded)
+
+        results["k-value"].append("No Anonymization")
+        results["Model"].append(model_name)
+        results["Accuracy"].append(accuracy_score(y_test, y_pred))
+        results["Precision"].append(precision_score(y_test, y_pred, average='weighted'))
+        results["Recall"].append(recall_score(y_test, y_pred, average='weighted'))
+        results["F1-Score"].append(f1_score(y_test, y_pred, average='weighted'))
+
+    # Define k-values to test
+    k_values = [5, 10, 100]
+
+    # Iterate over different k-values
+    for k in k_values:
+        print(f"\n===== Testing k-Anonymization with k={k} =====\n")
+
+        # Step 4: Apply k-Anonymization
+        print(f"[Step 4] Applying k={k} Anonymization on quasi-identifiers...")
+        quasi_identifiers_original = ["age", "education-num", "marital-status", "occupation"]
+
+        # Map original quasi-identifiers to encoded versions
+        quasi_identifiers_encoded = []
+        for qi in quasi_identifiers_original:
+            if qi in numerical_features:
+                quasi_identifiers_encoded.append(qi)
+            else:
+                # Find corresponding one-hot encoded features
+                encoded_qi_features = [feat for feat in encoded_feature_names if qi in feat]
+                quasi_identifiers_encoded.extend(encoded_qi_features)
+
+        print(f" - Selected Quasi-Identifiers after Encoding: {quasi_identifiers_encoded}")
+        print(" - Applying anonymization...\n")
+
+        # Convert dataset to DataFrame for consistency
+        x_train_encoded_df = pd.DataFrame(x_train_encoded, columns=encoded_feature_names)
+
+        anonymizer = Anonymize(k, quasi_identifiers_encoded, categorical_features=quasi_identifiers_encoded)
+
+        # Apply Anonymization
+        anonymized_data = anonymizer.anonymize(ArrayDataset(x_train_encoded_df, y_train, encoded_feature_names))
+
+        # Convert anonymized dataset to numerical format
+        anonymized_encoded = np.array(anonymized_data, dtype=np.float64)
+
+        # Step 5: Train and evaluate models on anonymized data
+        print("[Step 5] Evaluating models on anonymized dataset...")
+
+        for model_name, model in models.items():
+            model.fit(anonymized_encoded, y_train)
+            y_pred = model.predict(x_test_encoded)
+
+            results["k-value"].append(f"k={k}")
+            results["Model"].append(model_name)
+            results["Accuracy"].append(accuracy_score(y_test, y_pred))
+            results["Precision"].append(precision_score(y_test, y_pred, average='weighted'))
+            results["Recall"].append(recall_score(y_test, y_pred, average='weighted'))
+            results["F1-Score"].append(f1_score(y_test, y_pred, average='weighted'))
+
+    # Convert results to DataFrame and print
+    results_df = pd.DataFrame(results)
+    print("\n===== Final Model Performance Across k-Values =====")
+    print(results_df.to_string(index=False))
+
+    # Step 6: Draw conclusions
+    print("\n===== Conclusion =====")
+    print("🔹 Lower k (e.g., k=5) should retain more accuracy but provide less privacy.")
+    print("🔹 Higher k (e.g., k=100) should enforce stronger privacy but may reduce model performance.")
+    print("🔹 If utility is critical, k=10 might be an optimal balance.")
+    print("\n===== TEST COMPLETE: Model Accuracy Retention Analysis Finished =====\n")
 
 
 
