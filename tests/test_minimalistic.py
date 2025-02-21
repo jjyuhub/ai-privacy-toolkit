@@ -222,31 +222,38 @@ def test_minimizer_ncp(data_two_features):
     - Evaluates generalization techniques using GeneralizeToRepresentative.
     - Computes NCP scores before and after transformation.
     - Compares results to ensure correctness.
+    - Prints detailed calculations and explanations at each step.
     """
     x, y, features, x1 = data_two_features  # Load dataset
 
     # Initialize Decision Tree Classifier with specific parameters
+    print("Initializing DecisionTreeClassifier with min_samples_split=2 and min_samples_leaf=1...")
     base_est = DecisionTreeClassifier(random_state=0, min_samples_split=2, min_samples_leaf=1)
     
     # Wrap the classifier with SklearnClassifier
+    print("Wrapping the classifier with SklearnClassifier...")
     model = SklearnClassifier(base_est, CLASSIFIER_SINGLE_OUTPUT_CLASS_PROBABILITIES)
     
     # Train the model on the dataset
-    print("Training Decision Tree Classifier...")
+    print("Training Decision Tree Classifier with the dataset...")
     model.fit(ArrayDataset(x, y))
     
     # Prepare datasets for evaluation
+    print("Preparing datasets for evaluation...")
     ad = ArrayDataset(x)
     ad1 = ArrayDataset(x1, features_names=features)
     
     # Generate predictions
-    print("Generating predictions...")
+    print("Generating predictions from the trained model...")
     predictions = model.predict(ad)
+    print(f"Raw Predictions:\n{predictions[:20]}")
     if predictions.shape[1] > 1:
         predictions = np.argmax(predictions, axis=1)
+    print(f"Final Predictions after argmax (if applicable):\n{predictions[:20]}")
     
     # Set target accuracy for generalization
     target_accuracy = 0.4
+    print(f"Setting target accuracy to {target_accuracy} for generalization...")
     train_dataset = ArrayDataset(x, predictions, features_names=features)
     
     # Apply generalization without transformation
@@ -255,34 +262,46 @@ def test_minimizer_ncp(data_two_features):
     gen1.fit(dataset=train_dataset)
     ncp1 = gen1.ncp.fit_score  # NCP after fitting
     ncp2 = gen1.calculate_ncp(ad1)  # NCP on new dataset
+    print(f"NCP values:\n  ncp1 (after fitting): {ncp1}\n  ncp2 (on new dataset): {ncp2}")
     
     # Apply generalization with transformation
     print("Applying GeneralizeToRepresentative with transformation...")
     gen2 = GeneralizeToRepresentative(model, target_accuracy=target_accuracy)
     gen2.fit(dataset=train_dataset)
     ncp3 = gen2.ncp.fit_score  # NCP after fitting
+    print(f"NCP3 (after fitting with transformation): {ncp3}")
     
     # Transform and compute NCP at different stages
+    print("Transforming dataset ad1...")
     gen2.transform(dataset=ad1)
     ncp4 = gen2.ncp.transform_score
+    print(f"NCP4 (after transforming ad1): {ncp4}")
+    
+    print("Transforming dataset ad...")
     gen2.transform(dataset=ad)
     ncp5 = gen2.ncp.transform_score
+    print(f"NCP5 (after transforming ad): {ncp5}")
+    
+    print("Transforming dataset ad1 again...")
     gen2.transform(dataset=ad1)
     ncp6 = gen2.ncp.transform_score
+    print(f"NCP6 (after second transformation of ad1): {ncp6}")
     
     # Print verbose results
     print("First 20 samples BEFORE transformation:")
     print(pd.DataFrame(x[:20], columns=features))
+    
     print("First 20 samples AFTER transformation:")
     transformed_data = gen2.transform(dataset=ad)
     print(pd.DataFrame(transformed_data[:20], columns=features))
     
     # Assert expected relationships among NCP scores
-    assert (ncp1 <= ncp3), "Expected ncp1 <= ncp3, but found otherwise."
-    assert (ncp2 != ncp3), "Expected ncp2 != ncp3, but found otherwise."
-    assert (ncp3 != ncp4), "Expected ncp3 != ncp4, but found otherwise."
-    assert (ncp4 != ncp5), "Expected ncp4 != ncp5, but found otherwise."
-    assert (ncp6 == ncp4), "Expected ncp6 == ncp4, but found otherwise."
+    print("Validating expected relationships between NCP scores...")
+    assert (ncp1 <= ncp3), f"Assertion failed: Expected ncp1 ({ncp1}) <= ncp3 ({ncp3})"
+    assert (ncp2 != ncp3), f"Assertion failed: Expected ncp2 ({ncp2}) != ncp3 ({ncp3})"
+    assert (ncp3 != ncp4), f"Assertion failed: Expected ncp3 ({ncp3}) != ncp4 ({ncp4})"
+    assert (ncp4 != ncp5), f"Assertion failed: Expected ncp4 ({ncp4}) != ncp5 ({ncp5})"
+    assert (ncp6 == ncp4), f"Assertion failed: Expected ncp6 ({ncp6}) == ncp4 ({ncp4})"
     
-    print("Test completed successfully!")
+    print("All assertions passed! Test completed successfully!")
 
