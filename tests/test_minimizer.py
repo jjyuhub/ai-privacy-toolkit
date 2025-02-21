@@ -215,23 +215,65 @@ def check_ncp(ncp, expected_generalizations):
 
 
 def test_minimizer_params(cells):
-    # Assume two features, age and height, and boolean label
-    cells, features, x, y = cells
+    """
+    Test the GeneralizeToRepresentative minimization process.
+    This function:
+    - Loads dataset
+    - Trains a DecisionTreeClassifier
+    - Applies generalization minimization
+    - Compares the expected vs actual results
+    - Prints first 20 samples before and after transformation
+    """
+    cells, features, x, y = cells  # Extract dataset information
 
-    base_est = DecisionTreeClassifier(random_state=0, min_samples_split=2,
-                                      min_samples_leaf=1)
+    # Print dataset information
+    print("Dataset features: ", features)
+    print("First 20 samples of dataset:")
+    print(pd.DataFrame(x[:20], columns=features))
+
+    # Initialize the decision tree classifier
+    base_est = DecisionTreeClassifier(random_state=0, min_samples_split=2, min_samples_leaf=1)
+    
+    # Wrap the model with SklearnClassifier
     model = SklearnClassifier(base_est, CLASSIFIER_SINGLE_OUTPUT_CLASS_PROBABILITIES)
+    
+    # Fit the model to the dataset
+    print("Training Decision Tree Classifier...")
     model.fit(ArrayDataset(x, y))
-
-    expected_generalizations = {'categories': {}, 'category_representatives': {},
-                                'range_representatives': {'age': [38, 0.5, 40], 'height': [170, 0.5, 172]},
-                                'ranges': {'age': [38, 39], 'height': [170, 171]}, 'untouched': []}
-
+    
+    # Define expected generalization results
+    expected_generalizations = {
+        'categories': {},
+        'category_representatives': {},
+        'range_representatives': {'age': [38, 0.5, 40], 'height': [170, 0.5, 172]},
+        'ranges': {'age': [38, 39], 'height': [170, 171]},
+        'untouched': []
+    }
+    
+    # Apply generalization transformation
+    print("Applying GeneralizeToRepresentative minimization...")
     gen = GeneralizeToRepresentative(model, cells=cells)
     gener = gen.generalizations
+    
+    # Compare the results with expected generalizations
     compare_generalizations(gener, expected_generalizations)
+    
+    # Fit the generalization model
+    print("Fitting Generalization Model...")
     gen.fit()
-    gen.transform(dataset=ArrayDataset(x, features_names=features))
+    
+    # Transform the dataset
+    print("Transforming dataset...")
+    transformed_data = gen.transform(dataset=ArrayDataset(x, features_names=features))
+    
+    # Print before and after transformation
+    print("First 20 samples AFTER transformation:")
+    print(pd.DataFrame(transformed_data[:20], columns=features))
+    
+    # Ensure transformation is correctly applied
+    assert transformed_data.shape == x.shape, "Transformed data shape must match original"
+    
+    print("Test completed successfully!")
 
 
 def create_encoder(numeric_features, categorical_features, x):
