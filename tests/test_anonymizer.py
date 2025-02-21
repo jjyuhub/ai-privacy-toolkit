@@ -172,69 +172,129 @@ def test_anonymize_pandas_adult():
 
 
 def test_anonymize_pandas_nursery():
-    # Load the Nursery dataset (Pandas format)
+    """
+    This test ensures that k-anonymization is correctly applied to the Nursery dataset.
+    It follows a step-by-step process:
+    1. Load the dataset.
+    2. Convert categorical data to string format for consistency.
+    3. Define k-anonymity and select quasi-identifiers (QI).
+    4. Preprocess categorical and numerical data.
+    5. Train a Decision Tree model to generate predictions.
+    6. Apply anonymization to the dataset.
+    7. Perform rigorous checks to confirm that:
+       - Unique QI groups are reduced.
+       - Every QI group contains at least 'k' records.
+       - Non-QI features remain unchanged.
+    """
+
+    # Step 1: Load the Nursery dataset (Pandas format)
     (x_train, y_train), _ = get_nursery_dataset_pd()
 
-    # Convert all feature values to strings (ensuring categorical consistency)
+    # Print dataset preview for debugging
+    print("First 5 rows of the original dataset:\n", x_train.head())
+
+    # Step 2: Convert all feature values to strings
+    # This ensures that categorical data remains consistent across transformations
     x_train = x_train.astype(str)
 
-    # Define k-anonymity level (ensuring that each quasi-identifier group has at least 'k' records)
+    # Step 3: Define k-anonymity level
+    # This ensures that each quasi-identifier (QI) group has at least 'k' records
     k = 100
 
-    # Define all available features in the dataset
+    # Step 4: Define all available features in the dataset
     features = ["parents", "has_nurs", "form", "children", "housing", "finance", "social", "health"]
 
-    # Define quasi-identifiers (QI) that will be anonymized
+    # Step 5: Define quasi-identifiers (QI) that will be anonymized
+    # These are features that could be used to re-identify individuals
     QI = ["finance", "social", "health"]
 
-    # Define categorical features in the dataset
+    # Step 6: Define categorical features in the dataset
     categorical_features = ["parents", "has_nurs", "form", "housing", "finance", "social", "health", "children"]
 
-    # Identify numerical features (those not listed as categorical)
+    # Step 7: Identify numerical features
+    # Numerical features are those that are NOT listed in categorical_features
     numeric_features = [f for f in features if f not in categorical_features]
 
-    # Preprocessing step for numerical features: Fill missing values with a constant value (0)
+    # Print extracted categorical and numerical features
+    print("Categorical Features:", categorical_features)
+    print("Numeric Features:", numeric_features)
+
+    # Step 8: Preprocessing step for numerical features
+    # Here, we replace any missing numerical values with a constant value (0)
     numeric_transformer = Pipeline(
         steps=[('imputer', SimpleImputer(strategy='constant', fill_value=0))]
     )
 
-    # Preprocessing step for categorical features: Convert them to numerical format using one-hot encoding
+    # Step 9: Preprocessing step for categorical features
+    # Categorical data is converted to numerical format using one-hot encoding
+    # This ensures that the machine learning model can interpret categorical data
     categorical_transformer = OneHotEncoder(handle_unknown="ignore", sparse=False)
 
-    # Apply transformations: Numerical features are imputed, categorical features are one-hot encoded
+    # Step 10: Apply transformations: 
+    # - Numerical features are imputed with a constant value.
+    # - Categorical features are one-hot encoded.
     preprocessor = ColumnTransformer(
         transformers=[
-            ("num", numeric_transformer, numeric_features),  # Apply numeric processing
+            ("num", numeric_transformer, numeric_features),  # Apply numeric preprocessing
             ("cat", categorical_transformer, categorical_features),  # Apply categorical processing
         ]
     )
 
-    # Transform the dataset (convert categorical features to numerical format)
+    # Step 11: Transform the dataset
+    # This applies the preprocessing steps (imputation + one-hot encoding)
     encoded = preprocessor.fit_transform(x_train)
 
-    # Train a Decision Tree classifier on the transformed dataset
+    # Print transformed dataset dimensions
+    print(f"Shape of transformed dataset: {encoded.shape}")
+
+    # Step 12: Train a Decision Tree classifier on the transformed dataset
+    # The decision tree will learn patterns from the data and generate predictions
     model = DecisionTreeClassifier()
     model.fit(encoded, y_train)
 
-    # Generate predictions from the trained model
+    # Step 13: Generate predictions from the trained model
     pred = model.predict(encoded)
 
-    # Initialize the anonymizer with k-anonymity, targeting the selected quasi-identifiers
+    # Print sample predictions for debugging
+    print("Sample Predictions (First 10 rows):\n", pred[:10])
+
+    # Step 14: Initialize the anonymizer
+    # - k: Minimum size of each quasi-identifier group
+    # - QI: The selected quasi-identifiers for anonymization
+    # - categorical_features: Specify categorical attributes for proper handling
+    # - train_only_QI=True ensures that only QI values are modified
     anonymizer = Anonymize(k, QI, categorical_features=categorical_features, train_only_QI=True)
 
-    # Apply anonymization: Generalizing quasi-identifiers while preserving model output
+    # Step 15: Apply anonymization to the dataset
+    # The goal is to generalize quasi-identifiers while preserving model outputs
     anon = anonymizer.anonymize(ArrayDataset(x_train, pred))
+
+    # Print anonymized dataset preview for verification
+    print("First 5 rows of the anonymized dataset:\n", anon.head())
 
     # **Assertions: Verify Anonymization is Working Correctly**
 
-    # Check that the number of unique quasi-identifier groups is reduced after anonymization
-    assert (anon.loc[:, QI].drop_duplicates().shape[0] < x_train.loc[:, QI].drop_duplicates().shape[0])
+    # Step 16: Check that the number of unique QI groups is reduced after anonymization
+    original_qi_unique = x_train.loc[:, QI].drop_duplicates().shape[0]
+    anonymized_qi_unique = anon.loc[:, QI].drop_duplicates().shape[0]
+    print(f"Unique QI groups before anonymization: {original_qi_unique}")
+    print(f"Unique QI groups after anonymization: {anonymized_qi_unique}")
+    assert anonymized_qi_unique < original_qi_unique, "QI uniqueness should decrease after anonymization!"
 
-    # Ensure that each quasi-identifier group has at least 'k' records (enforcing k-anonymity)
-    assert (anon.loc[:, QI].value_counts().min() >= k)
+    # Step 17: Ensure that each quasi-identifier group has at least 'k' records
+    min_group_size = anon.loc[:, QI].value_counts().min()
+    print(f"Minimum QI group size after anonymization: {min_group_size}")
+    assert min_group_size >= k, f"Each QI group must have at least {k} records!"
 
-    # Validate that non-QI attributes remain unchanged after anonymization
+    # Step 18: Validate that non-QI attributes remain unchanged after anonymization
+    # We remove QI columns from both datasets and compare the remaining features
+    non_qi_unchanged = (anon.drop(QI, axis=1) == x_train.drop(QI, axis=1)).all().all()
+    print(f"Non-QI attributes remain unchanged: {non_qi_unchanged}")
     np.testing.assert_array_equal(anon.drop(QI, axis=1), x_train.drop(QI, axis=1))
+
+    # Final confirmation message
+    print("Test completed successfully! Anonymization works as expected.")
+
 
 
 
