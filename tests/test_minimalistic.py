@@ -249,10 +249,8 @@ from sklearn.model_selection import train_test_split
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder
 from sklearn.tree import DecisionTreeClassifier, DecisionTreeRegressor
-from sklearn.metrics import accuracy_score, confusion_matrix
+from sklearn.metrics import accuracy_score, confusion_matrix, brier_score_loss
 from scipy.stats import chi2_contingency
-from sklearn.calibration import calibration_curve
-from sklearn.metrics import brier_score_loss
 
 from torch import nn, optim, sigmoid, where
 from torch.nn import functional
@@ -275,103 +273,51 @@ tf.compat.v1.disable_eager_execution()
 
 ACCURACY_DIFF = 0.05  # Maximum allowed accuracy difference after anonymization
 
-def compute_fairness_metrics(y_true, y_pred, sensitive_attr):
+def compute_fairness_metrics(y_true, y_pred, y_pred_proba, sensitive_attr):
     """
-    Compute fairness metrics using statistical significance, false positive/negative rates, and calibration fairness.
+    Compute fairness metrics: statistical significance, equal FPR/FNR, and calibration fairness.
     """
-    print("Computing fairness metrics...")
     subgroups = np.unique(sensitive_attr)
-    metrics = {}
-    counts = []
-    false_positive_rates = {}
-    false_negative_rates = {}
-    calibration_scores = {}
+    counts, metrics = [], {}
     
     for subgroup in subgroups:
         indices = (sensitive_attr == subgroup)
-        correct = np.sum(y_pred[indices] == y_true[indices])
-        total = np.sum(indices)
-        acc = correct / total if total > 0 else 0
-        metrics[subgroup] = acc
-        counts.append([correct, total - correct])  # Store as [correct, incorrect]
-        
-        # Compute False Positive and False Negative Rates
         tn, fp, fn, tp = confusion_matrix(y_true[indices], y_pred[indices]).ravel()
-        fpr = fp / (fp + tn) if (fp + tn) > 0 else 0  # False Positive Rate
-        fnr = fn / (fn + tp) if (fn + tp) > 0 else 0  # False Negative Rate
-        false_positive_rates[subgroup] = fpr
-        false_negative_rates[subgroup] = fnr
-        
-        # Compute Calibration Score (Brier Score)
-        brier_score = brier_score_loss(y_true[indices], y_pred[indices])
-        calibration_scores[subgroup] = brier_score
+        fpr, fnr = fp / (fp + tn), fn / (fn + tp)
+        brier = brier_score_loss(y_true[indices], y_pred_proba[indices])
+        metrics[subgroup] = (accuracy_score(y_true[indices], y_pred[indices]), fpr, fnr, brier)
+        counts.append([tp + fn, fp + tn])
     
-    _, p_value, _, _ = chi2_contingency(counts)  # Perform Chi-Square Test
-    print(f"Chi-Square p-value: {p_value:.6f}")
-    assert p_value < 0.05, "Test failed due to statistically significant fairness violation!"
-    
-    # Check False Positive/Negative Rate Disparity
-    max_fpr = max(false_positive_rates.values())
-    min_fpr = min(false_positive_rates.values())
-    max_fnr = max(false_negative_rates.values())
-    min_fnr = min(false_negative_rates.values())
-    
-    assert abs(max_fpr - min_fpr) < 0.01, "Test failed due to false positive rate disparity!"
-    assert abs(max_fnr - min_fnr) < 0.01, "Test failed due to false negative rate disparity!"
-    
-    # Check Calibration Fairness
-    max_brier = max(calibration_scores.values())
-    min_brier = min(calibration_scores.values())
-    
-    assert abs(max_brier - min_brier) < 0.01, "Test failed due to calibration disparity!"
-    
-    print("Fairness check passed. No severe disparities detected.")
-    return metrics
+    _, p_value, _, _ = chi2_contingency(counts)
+    assert p_value < 0.05, "Test failed: Statistically significant fairness violation detected!"
+    assert max(m[1] for m in metrics.values()) - min(m[1] for m in metrics.values()) < 0.01, "Test failed: False Positive Rate disparity!"
+    assert max(m[2] for m in metrics.values()) - min(m[2] for m in metrics.values()) < 0.01, "Test failed: False Negative Rate disparity!"
+    assert max(m[3] for m in metrics.values()) - min(m[3] for m in metrics.values()) < 0.01, "Test failed: Calibration disparity!"
 
 def test_minimize_pandas_adult():
     """
-    Test the GeneralizeToRepresentative minimization process on the Adult dataset with full verbosity.
+    Test the GeneralizeToRepresentative minimization process with statistical fairness checks.
     """
-    
-    print("Loading the Adult dataset...")
     (x_train, y_train), _ = get_adult_dataset_pd()
-    x_train = x_train.head(1000)
-    y_train = y_train.head(1000)
+    x_train, y_train = x_train.head(1000), y_train.head(1000)
     features = ['age', 'workclass', 'education-num', 'marital-status', 'occupation', 'relationship', 'race', 'sex',
                 'capital-gain', 'capital-loss', 'hours-per-week', 'native-country']
     x_train = pd.DataFrame(x_train, columns=features)
     sensitive_attr = x_train['race'].values
-    categorical_features = ['workclass', 'marital-status', 'occupation', 'relationship', 'race', 'sex',
-                            'hours-per-week', 'native-country']
+    categorical_features = ['workclass', 'marital-status', 'occupation', 'relationship', 'race', 'sex', 'hours-per-week', 'native-country']
     numeric_features = [f for f in features if f not in categorical_features]
-    
-    print("Encoding categorical features...")
     preprocessor, encoded = create_encoder(numeric_features, categorical_features, x_train)
-    
-    print("Training Decision Tree Classifier...")
-    base_est = DecisionTreeClassifier(random_state=0, min_samples_split=2, min_samples_leaf=1)
-    model = SklearnClassifier(base_est, CLASSIFIER_SINGLE_OUTPUT_CLASS_PROBABILITIES)
+    model = SklearnClassifier(DecisionTreeClassifier(random_state=0, min_samples_split=2, min_samples_leaf=1), CLASSIFIER_SINGLE_OUTPUT_CLASS_PROBABILITIES)
     model.fit(ArrayDataset(encoded, y_train))
-    
-    print("Making predictions on training data...")
-    predictions = model.predict(ArrayDataset(encoded))
-    if predictions.shape[1] > 1:
-        predictions = np.argmax(predictions, axis=1)
-    
-    print("Computing fairness metrics before generalization...")
-    compute_fairness_metrics(y_train, predictions, sensitive_attr)
-    
-    print("Applying GeneralizeToRepresentative minimization...")
-    gen = GeneralizeToRepresentative(model, target_accuracy=0.7,
-                                     categorical_features=categorical_features, features_to_minimize=features,
-                                     encoder=preprocessor)
-    gen.fit(dataset=ArrayDataset(x_train, predictions, features_names=features))
+    y_pred = model.predict(ArrayDataset(encoded))
+    y_pred = np.argmax(y_pred, axis=1) if y_pred.shape[1] > 1 else y_pred
+    y_pred_proba = model.predict_proba(ArrayDataset(encoded))[:, 1]
+    compute_fairness_metrics(y_train, y_pred, y_pred_proba, sensitive_attr)
+    gen = GeneralizeToRepresentative(model, target_accuracy=0.7, categorical_features=categorical_features, features_to_minimize=features, encoder=preprocessor)
+    gen.fit(dataset=ArrayDataset(x_train, y_pred, features_names=features))
     transformed = gen.transform(dataset=ArrayDataset(x_train))
-    
-    print("Computing fairness metrics after generalization...")
-    compute_fairness_metrics(y_train, predictions, sensitive_attr)
-    
-    print("Test completed successfully!")
+    compute_fairness_metrics(y_train, y_pred, y_pred_proba, sensitive_attr)
+
 
 
 
