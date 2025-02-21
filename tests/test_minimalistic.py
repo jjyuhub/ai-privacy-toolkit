@@ -271,89 +271,12 @@ from apt.utils.models import SklearnClassifier, SklearnRegressor, KerasClassifie
 tf.compat.v1.disable_eager_execution()
 
 ACCURACY_DIFF = 0.05  # Maximum allowed accuracy difference after anonymization
-
-def compute_fairness_metrics(y_true, y_pred, sensitive_attr):
-    """
-    Compute fairness metrics including accuracy per subgroup and a stricter disparate impact measure.
-    This version applies a more aggressive penalty for disparities.
-    """
-    print("Computing fairness metrics...")
-    subgroups = np.unique(sensitive_attr)
-    print(f"Identified {len(subgroups)} subgroups in sensitive attribute.")
-    metrics = {}
-    
-    for subgroup in subgroups:
-        indices = (sensitive_attr == subgroup)
-        print(f"Calculating accuracy for subgroup: {subgroup}")
-        num_samples = np.sum(indices)
-        print(f"Total samples in subgroup {subgroup}: {num_samples}")
-        
-        if num_samples > 0:
-            acc = accuracy_score(y_true[indices], y_pred[indices])
-            print(f"Accuracy for {subgroup}: {acc:.4f}")
-        else:
-            acc = 0
-            print(f"No samples available for subgroup {subgroup}, setting accuracy to 0.")
-        
-        metrics[subgroup] = acc
-    
-    min_acc = min(metrics.values())
-    max_acc = max(metrics.values())
-    
-    # Apply stricter penalty: use squared ratio for disparate impact
-    disparate_impact = (min_acc / max_acc) ** 2 if max_acc > 0 else 0
-    
-    print("Final Fairness Metrics:")
-    print("Accuracy per subgroup:", metrics)
-    print(f"Disparate Impact (stricter measure, squared min/max accuracy ratio): {disparate_impact:.4f}")
-    
-    if disparate_impact < 0.85:
-        print("WARNING: Disparate impact is below the stricter threshold of 0.85, indicating potential unfairness.")
-    else:
-        print("Fairness check passed. No severe disparities detected.")
-    
-    return metrics, disparate_impact
-
-import pytest
-import numpy as np
-import pandas as pd
-import scipy
-
-from sklearn.compose import ColumnTransformer
-from sklearn.datasets import load_diabetes
-from sklearn.impute import SimpleImputer
-from sklearn.model_selection import train_test_split
-from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import OneHotEncoder
-from sklearn.tree import DecisionTreeClassifier, DecisionTreeRegressor
-from sklearn.metrics import accuracy_score
-
-from torch import nn, optim, sigmoid, where
-from torch.nn import functional
-from scipy.special import expit
-
-import tensorflow as tf
-from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import Dense, Input
-
-from apt.utils.datasets.datasets import PytorchData
-from apt.utils.models.pytorch_model import PyTorchClassifier
-from apt.minimization import GeneralizeToRepresentative
-from apt.utils.dataset_utils import get_iris_dataset_np, get_adult_dataset_pd, get_german_credit_dataset_pd
-from apt.utils.datasets import ArrayDataset
-from apt.utils.models import SklearnClassifier, SklearnRegressor, KerasClassifier, \
-    CLASSIFIER_SINGLE_OUTPUT_CLASS_PROBABILITIES, CLASSIFIER_SINGLE_OUTPUT_CATEGORICAL, \
-    CLASSIFIER_SINGLE_OUTPUT_CLASS_LOGITS, CLASSIFIER_MULTI_OUTPUT_BINARY_LOGITS
-
-tf.compat.v1.disable_eager_execution()
-
-ACCURACY_DIFF = 0.05  # Maximum allowed accuracy difference after anonymization
 NUM_SPLITS = 10  # Number of random splits for fairness stability testing
 
-def compute_fairness_metrics(y_true, y_pred, sensitive_attr):
+def compute_fairness_metrics(y_true, y_pred, sensitive_attr, intersectional_attr=None):
     """
     Compute fairness metrics including accuracy per subgroup and disparate impact.
-    Print all intermediate steps and explain the calculations.
+    Also performs intersectional fairness analysis if an additional attribute is provided.
     """
     print("Computing fairness metrics...")
     subgroups = np.unique(sensitive_attr)
@@ -388,11 +311,34 @@ def compute_fairness_metrics(y_true, y_pred, sensitive_attr):
     else:
         print("Fairness check passed. No severe disparities detected.")
     
+    # Intersectional Fairness Analysis
+    if intersectional_attr is not None:
+        print("Performing intersectional fairness analysis...")
+        intersectional_groups = np.unique(list(zip(sensitive_attr, intersectional_attr)))
+        intersectional_metrics = {}
+        
+        for group in intersectional_groups:
+            indices = (sensitive_attr == group[0]) & (intersectional_attr == group[1])
+            num_samples = np.sum(indices)
+            print(f"Total samples in intersectional subgroup {group}: {num_samples}")
+            
+            if num_samples > 0:
+                acc = accuracy_score(y_true[indices], y_pred[indices])
+                print(f"Accuracy for {group}: {acc:.4f}")
+            else:
+                acc = 0
+                print(f"No samples available for {group}, setting accuracy to 0.")
+            
+            intersectional_metrics[group] = acc
+        
+        print("Final Intersectional Fairness Metrics:")
+        print(intersectional_metrics)
+    
     return metrics, disparate_impact
 
 def test_fairness_stability():
     """
-    Perform fairness stability testing over multiple random dataset splits.
+    Perform fairness stability testing over multiple random dataset splits with intersectional fairness analysis.
     """
     print("Running fairness stability test with multiple dataset splits...")
     disparate_impact_scores = []
@@ -407,6 +353,7 @@ def test_fairness_stability():
                     'capital-gain', 'capital-loss', 'hours-per-week', 'native-country']
         x_train = pd.DataFrame(x_train, columns=features)
         sensitive_attr = x_train['race'].values
+        intersectional_attr = x_train['sex'].values  # Adding gender for intersectional fairness
         
         categorical_features = ['workclass', 'marital-status', 'occupation', 'relationship', 'race', 'sex',
                                 'hours-per-week', 'native-country']
@@ -420,7 +367,7 @@ def test_fairness_stability():
         if predictions.shape[1] > 1:
             predictions = np.argmax(predictions, axis=1)
         
-        metrics, di = compute_fairness_metrics(y_train, predictions, sensitive_attr)
+        metrics, di = compute_fairness_metrics(y_train, predictions, sensitive_attr, intersectional_attr)
         disparate_impact_scores.append(di)
         for subgroup, acc in metrics.items():
             if subgroup in subgroup_accuracies:
