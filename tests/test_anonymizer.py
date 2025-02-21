@@ -273,39 +273,86 @@ def test_anonymize_pandas_nursery():
 
     print("\n✅ Test Passed: Anonymization works as expected!")
 
-
 def test_regression():
-    # Load the diabetes dataset and split into training/testing sets
+    """
+    Test function to train a Decision Tree Regressor on the Diabetes dataset,
+    apply k-anonymization, and evaluate model performance before and after anonymization.
+    
+    This function prints detailed logs at every step and displays sample data before and after processing.
+    """
+    
+    # Step 1: Load the diabetes dataset
+    print("Loading the diabetes dataset...")
     dataset = load_diabetes()
+    
+    # Step 2: Split the dataset into training (50%) and testing (50%) sets
+    print("Splitting dataset into training (50%) and testing (50%)...")
     x_train, x_test, y_train, y_test = train_test_split(dataset.data, dataset.target, test_size=0.5, random_state=14)
-
-    # Train a Decision Tree Regressor
+    
+    print("Training set size:", x_train.shape)
+    print("Testing set size:", x_test.shape)
+    
+    # Step 3: Train a Decision Tree Regressor
+    print("Training Decision Tree Regressor on the training data...")
     model = DecisionTreeRegressor(random_state=10, min_samples_split=2)
     model.fit(x_train, y_train)
-    pred = model.predict(x_train)  # Get predictions
-
-    # Define k-anonymity and quasi-identifiers for anonymization
-    k = 10
-    QI = [0, 2, 5, 8]
-
-    # Apply anonymization to the dataset
+    
+    # Step 4: Generate predictions on the training set
+    print("Generating predictions on training data...")
+    pred = model.predict(x_train)
+    print("First 5 predictions:", pred[:5])
+    
+    # Step 5: Define k-anonymity level and Quasi-Identifiers (QI)
+    k = 10  # Minimum group size for anonymization
+    QI = [0, 2, 5, 8]  # Selecting features (indices) to be anonymized
+    
+    print("Applying k-anonymization with k =", k)
+    print("Quasi-Identifiers (QI) selected:", QI)
+    
+    # Step 6: Apply anonymization to the dataset
     anonymizer = Anonymize(k, QI, is_regression=True, train_only_QI=True)
     anon = anonymizer.anonymize(ArrayDataset(x_train, pred))
-
-    # Evaluate the base model performance before and after anonymization
-    print('Base model accuracy (R2 score): ', model.score(x_test, y_test))
-    model.fit(anon, y_train)  # Retrain model on anonymized data
-    print('Base model accuracy (R2 score) after anonymization: ', model.score(x_test, y_test))
-
-    # Ensure that QI uniqueness is reduced
-    assert (len(np.unique(anon[:, QI], axis=0)) < len(np.unique(x_train[:, QI], axis=0)))
-
-    # Ensure that each group has at least 'k' samples
+    
+    print("Anonymization complete. Checking results...")
+    
+    # Step 7: Evaluate model performance before anonymization
+    base_score = model.score(x_test, y_test)
+    print("Base model accuracy (R2 score) before anonymization:", base_score)
+    
+    # Step 8: Retrain the model using anonymized data
+    model.fit(anon, y_train)
+    anon_score = model.score(x_test, y_test)
+    print("Base model accuracy (R2 score) after anonymization:", anon_score)
+    
+    # Step 9: Verify anonymization effectiveness
+    
+    # Ensure that the number of unique QI values is reduced
+    unique_before = len(np.unique(x_train[:, QI], axis=0))
+    unique_after = len(np.unique(anon[:, QI], axis=0))
+    print("Unique QI combinations before anonymization:", unique_before)
+    print("Unique QI combinations after anonymization:", unique_after)
+    assert unique_after < unique_before, "Anonymization did not reduce unique QI values."
+    
+    # Ensure that each anonymized group contains at least k samples
     _, counts_elements = np.unique(anon[:, QI], return_counts=True)
-    assert (np.min(counts_elements) >= k)
-
+    min_group_size = np.min(counts_elements)
+    print("Minimum group size after anonymization:", min_group_size)
+    assert min_group_size >= k, "Anonymization failed: Some groups have fewer than k elements."
+    
     # Ensure non-QI features remain unchanged
-    assert ((np.delete(anon, QI, axis=1) == np.delete(x_train, QI, axis=1)).all())
+    unchanged_features = np.delete(anon, QI, axis=1) == np.delete(x_train, QI, axis=1)
+    print("Checking if non-QI features remain unchanged...")
+    assert unchanged_features.all(), "Non-QI features were modified during anonymization."
+    
+    # Step 10: Print first 5 samples before and after anonymization for visual comparison
+    print("\nFirst 5 samples BEFORE anonymization:")
+    print(pd.DataFrame(x_train[:5], columns=[f"Feature {i}" for i in range(x_train.shape[1])]))
+    
+    print("\nFirst 5 samples AFTER anonymization:")
+    print(pd.DataFrame(anon[:5], columns=[f"Feature {i}" for i in range(x_train.shape[1])]))
+    
+    print("Test completed successfully.")
+
 
 def test_anonymize_ndarray_one_hot():
     """
