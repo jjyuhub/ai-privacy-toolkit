@@ -505,16 +505,37 @@ def test_anonymize_pytorch_multi_label_binary():
 
 
 def test_errors():
-    with pytest.raises(ValueError):
+    """
+    This function tests various error cases to ensure that the Anonymize class
+    and its methods raise the expected ValueErrors when incorrect parameters are passed.
+    """
+
+    # Test case 1: k-anonymity value of 1 is invalid (must be >= 2) with quasi-identifiers [0, 2]
+    with pytest.raises(ValueError):  
         Anonymize(1, [0, 2])
-    with pytest.raises(ValueError):
+
+    # Test case 2: Quasi-identifier list is empty, which is not allowed
+    with pytest.raises(ValueError):  
         Anonymize(2, [])
-    with pytest.raises(ValueError):
+
+    # Test case 3: Quasi-identifier list is None, which should raise an error
+    with pytest.raises(ValueError):  
         Anonymize(2, None)
+
+    # Create an anonymizer instance with valid parameters (k=10 and quasi-identifiers [0, 2])
     anonymizer = Anonymize(10, [0, 2])
+
+    # Load the Iris dataset (NumPy format)
     (x_train, y_train), (x_test, y_test) = get_iris_dataset_np()
-    with pytest.raises(ValueError):
+
+    # Test case 4: Passing mismatched labels (y_test instead of y_train) should raise a ValueError
+    with pytest.raises(ValueError):  
         anonymizer.anonymize(dataset=ArrayDataset(x_train, y_test))
+
+    # Load the Adult dataset (Pandas format)
     (x_train, y_train), _ = get_adult_dataset_pd()
-    with pytest.raises(ValueError):
+
+    # Test case 5: Again, passing mismatched labels should raise a ValueError
+    with pytest.raises(ValueError):  
         anonymizer.anonymize(dataset=ArrayDataset(x_train, y_test))
+
