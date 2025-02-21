@@ -246,6 +246,7 @@ from sklearn.model_selection import train_test_split
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder
 from sklearn.tree import DecisionTreeClassifier, DecisionTreeRegressor
+from sklearn.metrics import accuracy_score
 
 from torch import nn, optim, sigmoid, where
 from torch.nn import functional
@@ -268,6 +269,46 @@ tf.compat.v1.disable_eager_execution()
 
 ACCURACY_DIFF = 0.05  # Maximum allowed accuracy difference after anonymization
 
+def compute_fairness_metrics(y_true, y_pred, sensitive_attr):
+    """
+    Compute fairness metrics including accuracy per subgroup and disparate impact.
+    Print all intermediate steps and explain the calculations.
+    """
+    print("Computing fairness metrics...")
+    subgroups = np.unique(sensitive_attr)
+    print(f"Identified {len(subgroups)} subgroups in sensitive attribute.")
+    metrics = {}
+    
+    for subgroup in subgroups:
+        indices = (sensitive_attr == subgroup)
+        print(f"Calculating accuracy for subgroup: {subgroup}")
+        num_samples = np.sum(indices)
+        print(f"Total samples in subgroup {subgroup}: {num_samples}")
+        
+        if num_samples > 0:
+            acc = accuracy_score(y_true[indices], y_pred[indices])
+            print(f"Accuracy for {subgroup}: {acc:.4f}")
+        else:
+            acc = 0
+            print(f"No samples available for subgroup {subgroup}, setting accuracy to 0.")
+        
+        metrics[subgroup] = acc
+    
+    min_acc = min(metrics.values())
+    max_acc = max(metrics.values())
+    disparate_impact = min_acc / max_acc if max_acc > 0 else 0
+    
+    print("Final Fairness Metrics:")
+    print("Accuracy per subgroup:", metrics)
+    print(f"Disparate Impact (min/max accuracy ratio): {disparate_impact:.4f}")
+    
+    if disparate_impact < 0.8:
+        print("WARNING: Disparate impact is below the acceptable threshold of 0.8, indicating potential unfairness.")
+    else:
+        print("Fairness check passed. No severe disparities detected.")
+    
+    return metrics, disparate_impact
+
 def test_minimize_pandas_adult():
     """
     Test the GeneralizeToRepresentative minimization process on the Adult dataset with full verbosity.
@@ -279,7 +320,7 @@ def test_minimize_pandas_adult():
     - Trains a DecisionTreeClassifier
     - Applies generalization minimization
     - Prints all numbers at every step
-    - Explains every calculation performed
+    - Computes fairness metrics to check impact on underrepresented groups
     """
     
     # Load the Adult dataset
@@ -298,22 +339,20 @@ def test_minimize_pandas_adult():
                 'capital-gain', 'capital-loss', 'hours-per-week', 'native-country']
     x_train = pd.DataFrame(x_train, columns=features)
     print("Feature names defined.")
-    print("First 5 samples:")
-    print(x_train.head())
+    
+    # Extract sensitive attribute for fairness evaluation
+    sensitive_attr = x_train['race'].values
     
     # Define categorical and numeric features
     categorical_features = ['workclass', 'marital-status', 'occupation', 'relationship', 'race', 'sex',
                             'hours-per-week', 'native-country']
     numeric_features = [f for f in features if f not in categorical_features]
     print("Categorical and numeric features separated.")
-    print(f"Categorical features: {categorical_features}")
-    print(f"Numeric features: {numeric_features}")
     
     # Encode categorical features
     print("Encoding categorical features...")
     preprocessor, encoded = create_encoder(numeric_features, categorical_features, x_train)
     print("Encoding completed.")
-    print(f"Encoded dataset shape: {encoded.shape}")
     
     # Train a DecisionTreeClassifier
     print("Initializing DecisionTreeClassifier...")
@@ -330,6 +369,10 @@ def test_minimize_pandas_adult():
         predictions = np.argmax(predictions, axis=1)
     print(f"First 10 predictions: {predictions[:10]}")
     
+    # Compute fairness metrics before generalization
+    print("Computing fairness metrics before generalization...")
+    compute_fairness_metrics(y_train, predictions, sensitive_attr)
+    
     # Define target accuracy
     target_accuracy = 0.7
     print(f"Target accuracy set to {target_accuracy}.")
@@ -344,11 +387,9 @@ def test_minimize_pandas_adult():
     gener = gen.generalizations
     print("Generalization applied.")
     
-    # Print first 20 samples before and after processing
-    print("First 20 samples BEFORE transformation:")
-    print(x_train.head(20))
-    print("First 20 samples AFTER transformation:")
-    print(pd.DataFrame(transformed, columns=features).head(20))
+    # Compute fairness metrics after generalization
+    print("Computing fairness metrics after generalization...")
+    compute_fairness_metrics(y_train, predictions, sensitive_attr)
     
     # Validate transformation
     print("Validating transformation accuracy...")
