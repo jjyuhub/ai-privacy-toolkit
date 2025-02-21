@@ -306,6 +306,8 @@ def test_model_accuracy_retention():
 
 
 
+
+
 def test_training_time_overhead():
     """
     Compares training time of models before and after anonymization (k=10, k=100).
@@ -326,7 +328,7 @@ def test_training_time_overhead():
     print(f" - Categorical Features: {categorical_features}")
     print(f" - Numerical Features: {numerical_features}\n")
 
-    # Step 2: Preprocess Data (One-Hot Encoding)
+    # Step 2: Measure Feature Encoding Time
     print("[Step 2] Applying One-Hot Encoding to categorical features...")
 
     preprocessor = ColumnTransformer(
@@ -336,8 +338,9 @@ def test_training_time_overhead():
         ]
     )
 
-    # Apply transformation
+    start_encoding_time = time.time()
     x_train_encoded = preprocessor.fit_transform(x_train)
+    encoding_time = time.time() - start_encoding_time  # Time taken for feature encoding
 
     # Get updated feature names after encoding
     encoded_feature_names = (
@@ -345,7 +348,8 @@ def test_training_time_overhead():
         list(preprocessor.named_transformers_['cat'].get_feature_names_out(categorical_features))
     )
 
-    print(f" - Transformed dataset has {x_train_encoded.shape[1]} features after encoding.\n")
+    print(f" - Transformed dataset has {x_train_encoded.shape[1]} features after encoding.")
+    print(f"✅ Feature encoding completed in {encoding_time:.4f} seconds.\n")
 
     # Define models for testing
     models = {
@@ -358,7 +362,10 @@ def test_training_time_overhead():
     k_values = [10, 100]
 
     # Store results
-    results = {"k-value": [], "Model": [], "Training Time (seconds)": []}
+    results = {
+        "k-value": [], "Model": [], "Feature Encoding Time (sec)": [], 
+        "Anonymization Time (sec)": [], "Training Time (sec)": []
+    }
 
     # Step 3: Measure Training Time on Original Data
     print("[Step 3] Measuring training time on original dataset...")
@@ -366,19 +373,21 @@ def test_training_time_overhead():
     for model_name, model in models.items():
         start_time = time.time()
         model.fit(x_train_encoded, y_train)
-        elapsed_time = time.time() - start_time
+        training_time = time.time() - start_time
 
         results["k-value"].append("No Anonymization")
         results["Model"].append(model_name)
-        results["Training Time (seconds)"].append(elapsed_time)
+        results["Feature Encoding Time (sec)"].append(encoding_time)
+        results["Anonymization Time (sec)"].append(0.0)  # No anonymization for baseline
+        results["Training Time (sec)"].append(training_time)
 
-        print(f"✅ {model_name} trained in {elapsed_time:.4f} seconds (No Anonymization).")
+        print(f"✅ {model_name} trained in {training_time:.4f} seconds (No Anonymization).")
 
     # Iterate over different k-values
     for k in k_values:
         print(f"\n===== Testing k-Anonymization with k={k} =====\n")
 
-        # Step 4: Apply k-Anonymization
+        # Step 4: Apply k-Anonymization and Measure Time
         print(f"[Step 4] Applying k={k} Anonymization on quasi-identifiers...")
         quasi_identifiers_original = ["age", "education-num", "marital-status", "occupation"]
 
@@ -400,10 +409,10 @@ def test_training_time_overhead():
 
         anonymizer = Anonymize(k, quasi_identifiers_encoded, categorical_features=quasi_identifiers_encoded)
 
-        # Apply Anonymization
-        start_time = time.time()
+        # Measure Anonymization Time
+        start_anonymization_time = time.time()
         anonymized_data = anonymizer.anonymize(ArrayDataset(x_train_encoded_df, y_train, encoded_feature_names))
-        anonymization_time = time.time() - start_time
+        anonymization_time = time.time() - start_anonymization_time  # Time taken for anonymization
 
         print(f"✅ Anonymization for k={k} completed in {anonymization_time:.4f} seconds.")
 
@@ -416,13 +425,15 @@ def test_training_time_overhead():
         for model_name, model in models.items():
             start_time = time.time()
             model.fit(anonymized_encoded, y_train)
-            elapsed_time = time.time() - start_time
+            training_time = time.time() - start_time
 
             results["k-value"].append(f"k={k}")
             results["Model"].append(model_name)
-            results["Training Time (seconds)"].append(elapsed_time)
+            results["Feature Encoding Time (sec)"].append(encoding_time)
+            results["Anonymization Time (sec)"].append(anonymization_time)
+            results["Training Time (sec)"].append(training_time)
 
-            print(f"✅ {model_name} trained in {elapsed_time:.4f} seconds (k={k}).")
+            print(f"✅ {model_name} trained in {training_time:.4f} seconds (k={k}).")
 
     # Convert results to DataFrame and print
     results_df = pd.DataFrame(results)
@@ -435,6 +446,7 @@ def test_training_time_overhead():
     print("🔹 Higher k (e.g., k=100) may significantly increase preprocessing and training overhead.")
     print("🔹 If efficiency is crucial, choosing a moderate k-value like k=10 is recommended.")
     print("\n===== TEST COMPLETE: Training Time Overhead Analysis Finished =====\n")
+
 
 
 
