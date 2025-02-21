@@ -55,10 +55,20 @@ from apt.anonymization import Anonymize
 from apt.utils.dataset_utils import get_adult_dataset_pd
 from apt.utils.datasets import ArrayDataset
 
+import numpy as np
+import pandas as pd
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.preprocessing import OneHotEncoder
+from sklearn.compose import ColumnTransformer
+from sklearn.pipeline import Pipeline
+from apt.anonymization import Anonymize
+from apt.utils.dataset_utils import get_adult_dataset_pd
+from apt.utils.datasets import ArrayDataset
+
 def test_feature_importance_shift():
     """
     Evaluates how k-anonymization affects feature importance in a Decision Tree model.
-    Fixes the issue by encoding categorical features before training AND before anonymization.
+    Fixes the issue by correctly mapping quasi-identifiers to their one-hot encoded versions.
     """
 
     print("\n===== STARTING TEST: Feature Importance Shift Due to Anonymization =====\n")
@@ -119,21 +129,31 @@ def test_feature_importance_shift():
     # Step 4: Apply k-Anonymization (k=10)
     print("\n[Step 4] Applying k-Anonymization (k=10) on quasi-identifiers...")
     k = 10  # Minimum number of individuals per group
-    quasi_identifiers = ["age", "education-num", "marital-status", "occupation"]
+    quasi_identifiers_original = ["age", "education-num", "marital-status", "occupation"]
 
-    print(f" - Selected Quasi-Identifiers: {quasi_identifiers}")
+    # Map original quasi-identifiers to their transformed versions
+    quasi_identifiers_encoded = []
+    for qi in quasi_identifiers_original:
+        if qi in numerical_features:
+            quasi_identifiers_encoded.append(qi)
+        else:
+            # Find corresponding one-hot encoded features
+            encoded_qi_features = [feat for feat in encoded_feature_names if qi in feat]
+            quasi_identifiers_encoded.extend(encoded_qi_features)
+
+    print(f" - Selected Quasi-Identifiers after Encoding: {quasi_identifiers_encoded}")
     print(" - Applying anonymization...\n")
 
-    # Apply the SAME transformation to the anonymized dataset BEFORE feeding into `Anonymize`
+    # Convert dataset to DataFrame for consistency
     x_train_encoded_df = pd.DataFrame(x_train_encoded, columns=encoded_feature_names)
 
-    anonymizer = Anonymize(k, quasi_identifiers, categorical_features=quasi_identifiers)
+    anonymizer = Anonymize(k, quasi_identifiers_encoded, categorical_features=quasi_identifiers_encoded)
 
-    # Convert anonymized dataset to numerical format using pre-trained encoder
+    # Apply Anonymization
     anonymized_data = anonymizer.anonymize(ArrayDataset(x_train_encoded_df, y_train, encoded_feature_names))
 
-    # Apply same transformation to anonymized data (ensuring feature consistency)
-    anonymized_encoded = np.array(anonymized_data, dtype=np.float64)  # Convert back to numerical format
+    # Convert anonymized dataset to numerical format
+    anonymized_encoded = np.array(anonymized_data, dtype=np.float64)
 
     # Step 5: Train Decision Tree on Anonymized Data
     print("[Step 5] Training Decision Tree Classifier on anonymized dataset...")
@@ -178,6 +198,9 @@ def test_feature_importance_shift():
         print("✅ Anonymization had minimal impact on feature importance.")
 
     print("\n===== TEST COMPLETE: Feature Importance Shift Analysis Finished =====\n")
+
+
+
 
 
 
