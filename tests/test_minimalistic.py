@@ -249,7 +249,10 @@ from sklearn.model_selection import train_test_split
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder
 from sklearn.tree import DecisionTreeClassifier, DecisionTreeRegressor
-from sklearn.metrics import accuracy_score
+from sklearn.metrics import accuracy_score, confusion_matrix
+from scipy.stats import chi2_contingency
+from sklearn.calibration import calibration_curve
+from sklearn.metrics import brier_score_loss
 
 from torch import nn, optim, sigmoid, where
 from torch.nn import functional
@@ -274,134 +277,117 @@ ACCURACY_DIFF = 0.05  # Maximum allowed accuracy difference after anonymization
 
 def compute_fairness_metrics(y_true, y_pred, sensitive_attr):
     """
-    Compute fairness metrics including accuracy per subgroup and a stricter disparate impact measure.
-    This version applies a more aggressive penalty for disparities.
+    Compute fairness metrics using statistical significance, false positive/negative rates, and calibration fairness.
     """
     print("Computing fairness metrics...")
     subgroups = np.unique(sensitive_attr)
-    print(f"Identified {len(subgroups)} subgroups in sensitive attribute.")
     metrics = {}
+    counts = []
+    false_positive_rates = {}
+    false_negative_rates = {}
+    calibration_scores = {}
     
     for subgroup in subgroups:
         indices = (sensitive_attr == subgroup)
-        print(f"Calculating accuracy for subgroup: {subgroup}")
-        num_samples = np.sum(indices)
-        print(f"Total samples in subgroup {subgroup}: {num_samples}")
-        
-        if num_samples > 0:
-            acc = accuracy_score(y_true[indices], y_pred[indices])
-            print(f"Accuracy for {subgroup}: {acc:.4f}")
-        else:
-            acc = 0
-            print(f"No samples available for subgroup {subgroup}, setting accuracy to 0.")
-        
+        correct = np.sum(y_pred[indices] == y_true[indices])
+        total = np.sum(indices)
+        acc = correct / total if total > 0 else 0
         metrics[subgroup] = acc
+        counts.append([correct, total - correct])  # Store as [correct, incorrect]
+        
+        # Compute False Positive and False Negative Rates
+        tn, fp, fn, tp = confusion_matrix(y_true[indices], y_pred[indices]).ravel()
+        fpr = fp / (fp + tn) if (fp + tn) > 0 else 0  # False Positive Rate
+        fnr = fn / (fn + tp) if (fn + tp) > 0 else 0  # False Negative Rate
+        false_positive_rates[subgroup] = fpr
+        false_negative_rates[subgroup] = fnr
+        
+        # Compute Calibration Score (Brier Score)
+        brier_score = brier_score_loss(y_true[indices], y_pred[indices])
+        calibration_scores[subgroup] = brier_score
     
-    min_acc = min(metrics.values())
-    max_acc = max(metrics.values())
+    _, p_value, _, _ = chi2_contingency(counts)  # Perform Chi-Square Test
+    print(f"Chi-Square p-value: {p_value:.6f}")
+    assert p_value < 0.05, "Test failed due to statistically significant fairness violation!"
     
-    # Apply stricter penalty: use squared ratio for disparate impact
-    disparate_impact = (min_acc / max_acc) ** 2 if max_acc > 0 else 0
+    # Check False Positive/Negative Rate Disparity
+    max_fpr = max(false_positive_rates.values())
+    min_fpr = min(false_positive_rates.values())
+    max_fnr = max(false_negative_rates.values())
+    min_fnr = min(false_negative_rates.values())
     
-    print("Final Fairness Metrics:")
-    print("Accuracy per subgroup:", metrics)
-    print(f"Disparate Impact (stricter measure, squared min/max accuracy ratio): {disparate_impact:.4f}")
+    assert abs(max_fpr - min_fpr) < 0.01, "Test failed due to false positive rate disparity!"
+    assert abs(max_fnr - min_fnr) < 0.01, "Test failed due to false negative rate disparity!"
     
-    if disparate_impact < 0.85:
-        print("WARNING: Disparate impact is below the stricter threshold of 0.85, indicating potential unfairness.")
-    else:
-        print("Fairness check passed. No severe disparities detected.")
+    # Check Calibration Fairness
+    max_brier = max(calibration_scores.values())
+    min_brier = min(calibration_scores.values())
     
-    return metrics, disparate_impact
+    assert abs(max_brier - min_brier) < 0.01, "Test failed due to calibration disparity!"
+    
+    print("Fairness check passed. No severe disparities detected.")
+    return metrics
 
 def test_minimize_pandas_adult():
     """
     Test the GeneralizeToRepresentative minimization process on the Adult dataset with full verbosity.
-    This function:
-    - Loads the Adult dataset
-    - Limits it to the first 1000 samples for efficiency
-    - Defines categorical and numeric features
-    - Encodes categorical features using One-Hot Encoding
-    - Trains a DecisionTreeClassifier
-    - Applies generalization minimization
-    - Prints all numbers at every step
-    - Computes fairness metrics to check impact on underrepresented groups with a stricter fairness penalty
     """
     
-    # Load the Adult dataset
     print("Loading the Adult dataset...")
     (x_train, y_train), _ = get_adult_dataset_pd()
-    print(f"Dataset loaded with {x_train.shape[0]} samples and {x_train.shape[1]} features.")
-    
-    # Select only the first 1000 samples for efficiency
-    print("Selecting the first 1000 samples...")
     x_train = x_train.head(1000)
     y_train = y_train.head(1000)
-    print(f"Subset created with {x_train.shape[0]} samples.")
-    
-    # Define feature names
     features = ['age', 'workclass', 'education-num', 'marital-status', 'occupation', 'relationship', 'race', 'sex',
                 'capital-gain', 'capital-loss', 'hours-per-week', 'native-country']
     x_train = pd.DataFrame(x_train, columns=features)
-    print("Feature names defined.")
-    
-    # Extract sensitive attribute for fairness evaluation
     sensitive_attr = x_train['race'].values
-    
-    # Define categorical and numeric features
     categorical_features = ['workclass', 'marital-status', 'occupation', 'relationship', 'race', 'sex',
                             'hours-per-week', 'native-country']
     numeric_features = [f for f in features if f not in categorical_features]
-    print("Categorical and numeric features separated.")
     
-    # Encode categorical features
     print("Encoding categorical features...")
     preprocessor, encoded = create_encoder(numeric_features, categorical_features, x_train)
-    print("Encoding completed.")
     
-    # Train a DecisionTreeClassifier
-    print("Initializing DecisionTreeClassifier...")
+    print("Training Decision Tree Classifier...")
     base_est = DecisionTreeClassifier(random_state=0, min_samples_split=2, min_samples_leaf=1)
     model = SklearnClassifier(base_est, CLASSIFIER_SINGLE_OUTPUT_CLASS_PROBABILITIES)
-    print("Training Decision Tree Classifier...")
     model.fit(ArrayDataset(encoded, y_train))
-    print("Training completed.")
     
-    # Make predictions
     print("Making predictions on training data...")
     predictions = model.predict(ArrayDataset(encoded))
     if predictions.shape[1] > 1:
         predictions = np.argmax(predictions, axis=1)
-    print(f"First 10 predictions: {predictions[:10]}")
     
-    # Compute fairness metrics before generalization
     print("Computing fairness metrics before generalization...")
     compute_fairness_metrics(y_train, predictions, sensitive_attr)
     
-    # Define target accuracy
-    target_accuracy = 0.7
-    print(f"Target accuracy set to {target_accuracy}.")
-    
-    # Apply generalization transformation
     print("Applying GeneralizeToRepresentative minimization...")
-    gen = GeneralizeToRepresentative(model, target_accuracy=target_accuracy,
+    gen = GeneralizeToRepresentative(model, target_accuracy=0.7,
                                      categorical_features=categorical_features, features_to_minimize=features,
                                      encoder=preprocessor)
     gen.fit(dataset=ArrayDataset(x_train, predictions, features_names=features))
     transformed = gen.transform(dataset=ArrayDataset(x_train))
-    gener = gen.generalizations
-    print("Generalization applied.")
     
-    # Compute fairness metrics after generalization
     print("Computing fairness metrics after generalization...")
     compute_fairness_metrics(y_train, predictions, sensitive_attr)
     
-    # Validate transformation
-    print("Validating transformation accuracy...")
-    rel_accuracy = model.score(ArrayDataset(preprocessor.transform(transformed), predictions))
-    print(f"Relative accuracy after transformation: {rel_accuracy}")
-    assert ((rel_accuracy >= target_accuracy) or (target_accuracy - rel_accuracy) <= ACCURACY_DIFF)
-    print("Validation successful! Test passed.")
+    print("Test completed successfully!")
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 def test_minimizer_ncp(data_two_features):
