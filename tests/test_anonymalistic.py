@@ -306,6 +306,136 @@ def test_model_accuracy_retention():
 
 
 
+def test_training_time_overhead():
+    """
+    Compares training time of models before and after anonymization (k=10, k=100).
+    Evaluates whether stronger privacy (higher k) introduces significant computational costs.
+    """
+
+    print("\n===== STARTING TEST: Training Time Overhead Due to Anonymization =====\n")
+
+    # Step 1: Load Dataset
+    print("[Step 1] Loading the Adult dataset...")
+    (x_train, y_train), _ = get_adult_dataset_pd()
+    feature_names = x_train.columns.tolist()
+
+    # Identify categorical and numerical features
+    categorical_features = x_train.select_dtypes(include=['object']).columns.tolist()
+    numerical_features = x_train.select_dtypes(exclude=['object']).columns.tolist()
+
+    print(f" - Categorical Features: {categorical_features}")
+    print(f" - Numerical Features: {numerical_features}\n")
+
+    # Step 2: Preprocess Data (One-Hot Encoding)
+    print("[Step 2] Applying One-Hot Encoding to categorical features...")
+
+    preprocessor = ColumnTransformer(
+        transformers=[
+            ('num', 'passthrough', numerical_features),
+            ('cat', OneHotEncoder(handle_unknown='ignore', sparse=False), categorical_features)
+        ]
+    )
+
+    # Apply transformation
+    x_train_encoded = preprocessor.fit_transform(x_train)
+
+    # Get updated feature names after encoding
+    encoded_feature_names = (
+        numerical_features +
+        list(preprocessor.named_transformers_['cat'].get_feature_names_out(categorical_features))
+    )
+
+    print(f" - Transformed dataset has {x_train_encoded.shape[1]} features after encoding.\n")
+
+    # Define models for testing
+    models = {
+        "Decision Tree": DecisionTreeClassifier(random_state=42),
+        "Gradient Boosting": GradientBoostingClassifier(random_state=42),
+        "Neural Network": MLPClassifier(hidden_layer_sizes=(100,), max_iter=300, random_state=42)
+    }
+
+    # Define k-values to test
+    k_values = [10, 100]
+
+    # Store results
+    results = {"k-value": [], "Model": [], "Training Time (seconds)": []}
+
+    # Step 3: Measure Training Time on Original Data
+    print("[Step 3] Measuring training time on original dataset...")
+
+    for model_name, model in models.items():
+        start_time = time.time()
+        model.fit(x_train_encoded, y_train)
+        elapsed_time = time.time() - start_time
+
+        results["k-value"].append("No Anonymization")
+        results["Model"].append(model_name)
+        results["Training Time (seconds)"].append(elapsed_time)
+
+        print(f"✅ {model_name} trained in {elapsed_time:.4f} seconds (No Anonymization).")
+
+    # Iterate over different k-values
+    for k in k_values:
+        print(f"\n===== Testing k-Anonymization with k={k} =====\n")
+
+        # Step 4: Apply k-Anonymization
+        print(f"[Step 4] Applying k={k} Anonymization on quasi-identifiers...")
+        quasi_identifiers_original = ["age", "education-num", "marital-status", "occupation"]
+
+        # Map original quasi-identifiers to encoded versions
+        quasi_identifiers_encoded = []
+        for qi in quasi_identifiers_original:
+            if qi in numerical_features:
+                quasi_identifiers_encoded.append(qi)
+            else:
+                # Find corresponding one-hot encoded features
+                encoded_qi_features = [feat for feat in encoded_feature_names if qi in feat]
+                quasi_identifiers_encoded.extend(encoded_qi_features)
+
+        print(f" - Selected Quasi-Identifiers after Encoding: {quasi_identifiers_encoded}")
+        print(" - Applying anonymization...\n")
+
+        # Convert dataset to DataFrame for consistency
+        x_train_encoded_df = pd.DataFrame(x_train_encoded, columns=encoded_feature_names)
+
+        anonymizer = Anonymize(k, quasi_identifiers_encoded, categorical_features=quasi_identifiers_encoded)
+
+        # Apply Anonymization
+        start_time = time.time()
+        anonymized_data = anonymizer.anonymize(ArrayDataset(x_train_encoded_df, y_train, encoded_feature_names))
+        anonymization_time = time.time() - start_time
+
+        print(f"✅ Anonymization for k={k} completed in {anonymization_time:.4f} seconds.")
+
+        # Convert anonymized dataset to numerical format
+        anonymized_encoded = np.array(anonymized_data, dtype=np.float64)
+
+        # Step 5: Measure Training Time on Anonymized Data
+        print("[Step 5] Measuring training time on anonymized dataset...")
+
+        for model_name, model in models.items():
+            start_time = time.time()
+            model.fit(anonymized_encoded, y_train)
+            elapsed_time = time.time() - start_time
+
+            results["k-value"].append(f"k={k}")
+            results["Model"].append(model_name)
+            results["Training Time (seconds)"].append(elapsed_time)
+
+            print(f"✅ {model_name} trained in {elapsed_time:.4f} seconds (k={k}).")
+
+    # Convert results to DataFrame and print
+    results_df = pd.DataFrame(results)
+    print("\n===== Final Training Time Across k-Values =====")
+    print(results_df.to_string(index=False))
+
+    # Step 6: Draw conclusions
+    print("\n===== Conclusion =====")
+    print("🔹 Lower k (e.g., k=10) should retain reasonable training times.")
+    print("🔹 Higher k (e.g., k=100) may significantly increase preprocessing and training overhead.")
+    print("🔹 If efficiency is crucial, choosing a moderate k-value like k=10 is recommended.")
+    print("\n===== TEST COMPLETE: Training Time Overhead Analysis Finished =====\n")
+
 
 
 
