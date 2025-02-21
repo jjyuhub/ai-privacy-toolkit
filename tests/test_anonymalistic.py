@@ -57,6 +57,7 @@ from apt.utils.datasets import ArrayDataset
 
 import numpy as np
 import pandas as pd
+from scipy.stats import ttest_rel, f_oneway
 from sklearn.tree import DecisionTreeClassifier
 from sklearn.preprocessing import OneHotEncoder
 from sklearn.compose import ColumnTransformer
@@ -64,13 +65,13 @@ from apt.anonymization import Anonymize
 from apt.utils.dataset_utils import get_adult_dataset_pd
 from apt.utils.datasets import ArrayDataset
 
-def test_feature_importance_shift_multiple_k():
+def test_feature_importance_shift_multiple_k_with_stats():
     """
     Compares feature importance shifts for k-anonymization with k=5, k=10, and k=100.
-    Ensures we observe the trade-off between privacy and model utility.
+    Uses T-Tests and ANOVA to assess statistical significance of feature importance shifts.
     """
 
-    print("\n===== STARTING TEST: Feature Importance Shift Across k-Values =====\n")
+    print("\n===== STARTING TEST: Feature Importance Shift Across k-Values with Statistical Tests =====\n")
 
     # Step 1: Load Dataset
     print("[Step 1] Loading the Adult dataset...")
@@ -123,6 +124,7 @@ def test_feature_importance_shift_multiple_k():
 
     # Define k-values to test
     k_values = [5, 10, 100]
+    importance_results = {}
 
     # Iterate over different k-values
     for k in k_values:
@@ -172,36 +174,37 @@ def test_feature_importance_shift_multiple_k():
         print(f"\nTop 10 Features After Anonymization (k={k}):")
         print(importance_df_after.head(10).to_string(index=False))
 
-        # Step 6: Analyze Feature Importance Shift
-        print(f"\n[Step 6] Comparing Feature Importance Shift Before and After Anonymization (k={k})...")
-        comparison_df = importance_df_before.merge(importance_df_after, on="Feature", suffixes=("_Before", f"_After_k{k}"))
-        comparison_df[f"Importance_Change_k{k}"] = comparison_df[f"Importance_After_k{k}"] - comparison_df["Importance_Before"]
+        # Store results
+        importance_results[k] = feature_importance_after
 
-        # Sort by absolute importance change
-        comparison_df = comparison_df.sort_values(by=f"Importance_Change_k{k}", ascending=True)
+    # Step 6: Statistical Significance Tests
+    print("\n===== Statistical Significance Analysis =====\n")
 
-        print(f"\nFeatures with the Most Reduction in Importance (k={k}):")
-        print(comparison_df.head(10).to_string(index=False))
+    # Perform T-Test (paired) between original and each k-anonymized dataset
+    for k in k_values:
+        t_stat, p_value = ttest_rel(feature_importance_before, importance_results[k])
+        print(f"T-Test for k={k}: t-statistic={t_stat:.4f}, p-value={p_value:.4f}")
 
-        print(f"\nFeatures with the Most Increase in Importance (k={k}):")
-        print(comparison_df.tail(10).to_string(index=False))
-
-        # Step 7: Conclusion for this k-value
-        print(f"\n[Step 7] Drawing Conclusions for k={k}...")
-        most_reduced_features = comparison_df.nsmallest(5, f"Importance_Change_k{k}")
-        most_important_lost_feature = most_reduced_features.iloc[0]["Feature"]
-
-        print(f"\n✅ The most affected feature for k={k} was: **{most_important_lost_feature}**, losing {most_reduced_features.iloc[0][f'Importance_Change_k{k}']:.4f} importance.")
-
-        if most_reduced_features[f"Importance_Change_k{k}"].min() < -0.05:
-            print(f"⚠️ Anonymization (k={k}) significantly reduced the importance of key predictive features.")
+        if p_value < 0.05:
+            print(f"✅ Statistically Significant Change Detected for k={k} (p < 0.05)")
         else:
-            print(f"✅ Anonymization (k={k}) had minimal impact on feature importance.")
+            print(f"⚠️ No Significant Change Detected for k={k} (p >= 0.05)")
 
-        print(f"\n===== TEST COMPLETE for k={k} =====\n")
+    # Perform ANOVA across different k-values
+    f_stat, anova_p_value = f_oneway(
+        feature_importance_before, importance_results[5], importance_results[10], importance_results[100]
+    )
 
-# Run the test for multiple k values
-test_feature_importance_shift_multiple_k()
+    print(f"\nANOVA Test Across k-values: F-statistic={f_stat:.4f}, p-value={anova_p_value:.4f}")
+
+    if anova_p_value < 0.05:
+        print("✅ Statistically Significant Differences in Feature Importance Across k-values (p < 0.05)")
+    else:
+        print("⚠️ No Significant Differences Across k-values (p >= 0.05)")
+
+    print("\n===== TEST COMPLETE: Feature Importance Shift with Statistical Analysis =====\n")
+
+
 
 
 
