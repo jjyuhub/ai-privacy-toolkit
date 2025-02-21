@@ -307,8 +307,6 @@ def test_regression():
     # Ensure non-QI features remain unchanged
     assert ((np.delete(anon, QI, axis=1) == np.delete(x_train, QI, axis=1)).all())
 
-
-
 def test_anonymize_ndarray_one_hot():
     """
     Test function to apply k-anonymization on a NumPy array with one-hot encoded quasi-identifiers (QI).
