@@ -213,6 +213,142 @@ def check_ncp(ncp, expected_generalizations):
     if len(expected_generalizations['ranges'].keys()) > 0 or len(expected_generalizations['categories'].keys()) > 0:
         assert (ncp > 0.0)
 
+import pytest
+import numpy as np
+import pandas as pd
+import scipy
+
+from sklearn.compose import ColumnTransformer
+from sklearn.datasets import load_diabetes
+from sklearn.impute import SimpleImputer
+from sklearn.model_selection import train_test_split
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import OneHotEncoder
+from sklearn.tree import DecisionTreeClassifier, DecisionTreeRegressor
+
+from torch import nn, optim, sigmoid, where
+from torch.nn import functional
+from scipy.special import expit
+
+import tensorflow as tf
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import Dense, Input
+
+from apt.utils.datasets.datasets import PytorchData
+from apt.utils.models.pytorch_model import PyTorchClassifier
+from apt.minimization import GeneralizeToRepresentative
+from apt.utils.dataset_utils import get_iris_dataset_np, get_adult_dataset_pd, get_german_credit_dataset_pd
+from apt.utils.datasets import ArrayDataset
+from apt.utils.models import SklearnClassifier, SklearnRegressor, KerasClassifier, \
+    CLASSIFIER_SINGLE_OUTPUT_CLASS_PROBABILITIES, CLASSIFIER_SINGLE_OUTPUT_CATEGORICAL, \
+    CLASSIFIER_SINGLE_OUTPUT_CLASS_LOGITS, CLASSIFIER_MULTI_OUTPUT_BINARY_LOGITS
+
+tf.compat.v1.disable_eager_execution()
+
+ACCURACY_DIFF = 0.05  # Maximum allowed accuracy difference after anonymization
+
+def test_minimize_pandas_adult():
+    """
+    Test the GeneralizeToRepresentative minimization process on the Adult dataset.
+    This function:
+    - Loads the Adult dataset
+    - Limits it to the first 1000 samples for efficiency
+    - Defines categorical and numeric features
+    - Encodes categorical features using One-Hot Encoding
+    - Trains a DecisionTreeClassifier
+    - Applies generalization minimization
+    - Prints first 20 data entries before and after processing
+    - Compares expected vs actual results
+    """
+    
+    # Load the Adult dataset
+    (x_train, y_train), _ = get_adult_dataset_pd()
+    
+    # Select only the first 1000 samples for efficiency
+    x_train = x_train.head(1000)
+    y_train = y_train.head(1000)
+    
+    # Define feature names
+    features = ['age', 'workclass', 'education-num', 'marital-status', 'occupation', 'relationship', 'race', 'sex',
+                'capital-gain', 'capital-loss', 'hours-per-week', 'native-country']
+    x_train = pd.DataFrame(x_train, columns=features)
+    
+    # Define categorical and numeric features
+    categorical_features = ['workclass', 'marital-status', 'occupation', 'relationship', 'race', 'sex',
+                            'hours-per-week', 'native-country']
+    
+    # Define quasi-identifiers (features to generalize)
+    qi = ['age', 'workclass', 'education-num', 'marital-status', 'occupation', 'relationship', 'race', 'sex',
+          'native-country']
+    
+    # Extract numeric features
+    numeric_features = [f for f in features if f not in categorical_features]
+    
+    # Encode categorical features
+    preprocessor, encoded = create_encoder(numeric_features, categorical_features, x_train)
+    
+    # Train a DecisionTreeClassifier
+    base_est = DecisionTreeClassifier(random_state=0, min_samples_split=2, min_samples_leaf=1)
+    model = SklearnClassifier(base_est, CLASSIFIER_SINGLE_OUTPUT_CLASS_PROBABILITIES)
+    print("Training Decision Tree Classifier...")
+    model.fit(ArrayDataset(encoded, y_train))
+    
+    # Make predictions
+    predictions = model.predict(ArrayDataset(encoded))
+    if predictions.shape[1] > 1:
+        predictions = np.argmax(predictions, axis=1)
+    
+    # Define target accuracy
+    target_accuracy = 0.7
+    
+    # Apply generalization transformation
+    print("Applying GeneralizeToRepresentative minimization...")
+    gen = GeneralizeToRepresentative(model, target_accuracy=target_accuracy,
+                                     categorical_features=categorical_features, features_to_minimize=qi,
+                                     encoder=preprocessor)
+    gen.fit(dataset=ArrayDataset(x_train, predictions, features_names=features))
+    transformed = gen.transform(dataset=ArrayDataset(x_train))
+    gener = gen.generalizations
+    
+    # Print first 20 samples before and after processing
+    print("First 20 samples BEFORE transformation:")
+    print(x_train.head(20))
+    print("First 20 samples AFTER transformation:")
+    print(pd.DataFrame(transformed, columns=features).head(20))
+    
+    # Expected generalizations after transformation
+    expected_generalizations = {'ranges': {'age': [], 'education-num': []}, 'categories': {
+        'workclass': [['Self-emp-not-inc', 'Private', 'Federal-gov', 'Self-emp-inc', '?', 'Local-gov', 'State-gov']],
+        'marital-status': [
+            ['Divorced', 'Married-AF-spouse', 'Married-spouse-absent', 'Widowed', 'Separated', 'Married-civ-spouse',
+             'Never-married']], 'occupation': [
+            ['Tech-support', 'Priv-house-serv', 'Machine-op-inspct', 'Other-service', 'Prof-specialty', 'Adm-clerical',
+             'Protective-serv', 'Handlers-cleaners', 'Transport-moving', 'Armed-Forces', '?', 'Sales',
+             'Farming-fishing', 'Exec-managerial', 'Craft-repair']],
+        'relationship': [['Not-in-family', 'Wife', 'Other-relative', 'Husband', 'Unmarried', 'Own-child']],
+        'race': [['Asian-Pac-Islander', 'White', 'Other', 'Black', 'Amer-Indian-Eskimo']], 'sex': [['Female', 'Male']],
+        'native-country': [
+            ['Euro_1', 'LatinAmerica', 'BritishCommonwealth', 'SouthAmerica', 'UnitedStates', 'China', 'Euro_2',
+             'SE_Asia', 'Other', 'Unknown']]}, 'untouched': ['capital-loss', 'hours-per-week', 'capital-gain']}
+    
+    # Validate generalizations
+    compare_generalizations(gener, expected_generalizations)
+    
+    # Validate transformed data structure
+    np.testing.assert_array_equal(transformed.drop(qi, axis=1), x_train.drop(qi, axis=1))
+    check_features(features, expected_generalizations, transformed, x_train, True)
+    
+    # Check NCP score
+    ncp = gen.ncp.transform_score
+    check_ncp(ncp, expected_generalizations)
+    
+    # Validate model accuracy after transformation
+    rel_accuracy = model.score(ArrayDataset(preprocessor.transform(transformed), predictions))
+    assert ((rel_accuracy >= target_accuracy) or (target_accuracy - rel_accuracy) <= ACCURACY_DIFF)
+    
+    print("Test completed successfully!")
+
+
 
 def test_minimizer_ncp(data_two_features):
     """
