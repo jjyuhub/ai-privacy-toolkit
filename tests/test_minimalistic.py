@@ -214,78 +214,75 @@ def check_ncp(ncp, expected_generalizations):
         assert (ncp > 0.0)
 
 
-def test_minimizer_fit(data_two_features):
+def test_minimizer_ncp(data_two_features):
     """
-    Test the GeneralizeToRepresentative minimization process on a dataset with two features.
-    This function:
-    - Loads dataset
-    - Trains a DecisionTreeClassifier
-    - Applies generalization minimization
-    - Compares the expected vs actual results
-    - Prints before and after transformations
+    Test the impact of different generalization methods on normalized certainty penalty (NCP).
+    This test:
+    - Trains a DecisionTreeClassifier on a dataset.
+    - Evaluates generalization techniques using GeneralizeToRepresentative.
+    - Computes NCP scores before and after transformation.
+    - Compares results to ensure correctness.
     """
-    x, y, features, _ = data_two_features  # Extract dataset information
+    x, y, features, x1 = data_two_features  # Load dataset
 
-    # Initialize the decision tree classifier
+    # Initialize Decision Tree Classifier with specific parameters
     base_est = DecisionTreeClassifier(random_state=0, min_samples_split=2, min_samples_leaf=1)
     
-    # Wrap the model with SklearnClassifier
+    # Wrap the classifier with SklearnClassifier
     model = SklearnClassifier(base_est, CLASSIFIER_SINGLE_OUTPUT_CLASS_PROBABILITIES)
     
-    # Fit the model to the dataset
+    # Train the model on the dataset
     print("Training Decision Tree Classifier...")
     model.fit(ArrayDataset(x, y))
     
-    # Convert dataset into ArrayDataset format for predictions
+    # Prepare datasets for evaluation
     ad = ArrayDataset(x)
-    predictions = model.predict(ad)
+    ad1 = ArrayDataset(x1, features_names=features)
     
-    # Ensure single-label output if applicable
+    # Generate predictions
+    print("Generating predictions...")
+    predictions = model.predict(ad)
     if predictions.shape[1] > 1:
         predictions = np.argmax(predictions, axis=1)
     
-    target_accuracy = 0.5  # Set a target accuracy threshold
-    
-    # Initialize the generalization minimizer
-    gen = GeneralizeToRepresentative(model, target_accuracy=target_accuracy)
-    
-    # Convert the dataset into training format
+    # Set target accuracy for generalization
+    target_accuracy = 0.4
     train_dataset = ArrayDataset(x, predictions, features_names=features)
     
-    # Print first 20 rows before transformation
+    # Apply generalization without transformation
+    print("Applying GeneralizeToRepresentative without transformation...")
+    gen1 = GeneralizeToRepresentative(model, target_accuracy=target_accuracy, generalize_using_transform=False)
+    gen1.fit(dataset=train_dataset)
+    ncp1 = gen1.ncp.fit_score  # NCP after fitting
+    ncp2 = gen1.calculate_ncp(ad1)  # NCP on new dataset
+    
+    # Apply generalization with transformation
+    print("Applying GeneralizeToRepresentative with transformation...")
+    gen2 = GeneralizeToRepresentative(model, target_accuracy=target_accuracy)
+    gen2.fit(dataset=train_dataset)
+    ncp3 = gen2.ncp.fit_score  # NCP after fitting
+    
+    # Transform and compute NCP at different stages
+    gen2.transform(dataset=ad1)
+    ncp4 = gen2.ncp.transform_score
+    gen2.transform(dataset=ad)
+    ncp5 = gen2.ncp.transform_score
+    gen2.transform(dataset=ad1)
+    ncp6 = gen2.ncp.transform_score
+    
+    # Print verbose results
     print("First 20 samples BEFORE transformation:")
     print(pd.DataFrame(x[:20], columns=features))
-    
-    # Fit the generalization model
-    print("Fitting GeneralizeToRepresentative minimization...")
-    gen.fit(dataset=train_dataset)
-    
-    # Transform the dataset
-    transformed = gen.transform(dataset=ad)
-    
-    # Print first 20 rows after transformation
     print("First 20 samples AFTER transformation:")
-    print(pd.DataFrame(transformed[:20], columns=features))
+    transformed_data = gen2.transform(dataset=ad)
+    print(pd.DataFrame(transformed_data[:20], columns=features))
     
-    # Retrieve generalizations from the transformation process
-    gener = gen.generalizations
-    expected_generalizations = {'ranges': {}, 'categories': {}, 'untouched': ['height', 'age']}
-    
-    # Compare expected generalizations with actual generalizations
-    compare_generalizations(gener, expected_generalizations)
-    
-    # Check if features are transformed correctly
-    check_features(features, expected_generalizations, transformed, x)
-    
-    # Ensure that transformation did not change original data values
-    assert np.equal(x, transformed).all(), "Transformed data must match original data"
-    
-    # Calculate normalized certainty penalty (NCP)
-    ncp = gen.ncp.transform_score
-    check_ncp(ncp, expected_generalizations)
-    
-    # Compute and validate relative accuracy after transformation
-    rel_accuracy = model.score(ArrayDataset(transformed, predictions))
-    assert ((rel_accuracy >= target_accuracy) or (target_accuracy - rel_accuracy) <= ACCURACY_DIFF)
+    # Assert expected relationships among NCP scores
+    assert (ncp1 <= ncp3), "Expected ncp1 <= ncp3, but found otherwise."
+    assert (ncp2 != ncp3), "Expected ncp2 != ncp3, but found otherwise."
+    assert (ncp3 != ncp4), "Expected ncp3 != ncp4, but found otherwise."
+    assert (ncp4 != ncp5), "Expected ncp4 != ncp5, but found otherwise."
+    assert (ncp6 == ncp4), "Expected ncp6 == ncp4, but found otherwise."
     
     print("Test completed successfully!")
+
