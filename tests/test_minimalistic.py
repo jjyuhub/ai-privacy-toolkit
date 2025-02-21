@@ -273,17 +273,14 @@ tf.compat.v1.disable_eager_execution()
 ACCURACY_DIFF = 0.05  # Maximum allowed accuracy difference after anonymization
 NUM_SPLITS = 10  # Number of random splits for fairness stability testing
 
-def compute_fairness_metrics(y_true, y_pred, sensitive_attr, intersectional_attr):
+def compute_fairness_and_privacy_metrics(y_true, y_pred, sensitive_attr, ncp_before, ncp_after):
     """
     Compute fairness metrics including accuracy per subgroup and disparate impact.
-    Also performs intersectional fairness analysis correctly.
+    Also evaluates privacy risk reduction by comparing NCP scores before and after generalization.
     """
-    print("Computing fairness metrics...")
+    print("Computing fairness and privacy risk metrics...")
     subgroups = np.unique(sensitive_attr)
-    intersectional_groups = np.unique(list(zip(sensitive_attr.astype(str), intersectional_attr.astype(str))))
-    
-    print(f"Identified {len(subgroups)} subgroups in sensitive attribute: {np.unique(sensitive_attr)}")
-    print(f"Identified {len(np.unique(intersectional_attr))} unique gender categories: {np.unique(intersectional_attr)}")
+    print(f"Identified {len(subgroups)} subgroups in sensitive attribute.")
     metrics = {}
     
     for subgroup in subgroups:
@@ -313,36 +310,26 @@ def compute_fairness_metrics(y_true, y_pred, sensitive_attr, intersectional_attr
     else:
         print("Fairness check passed. No severe disparities detected.")
     
-    # Intersectional Fairness Analysis
-    print("Performing intersectional fairness analysis...")
-    intersectional_metrics = {}
+    # Privacy risk evaluation
+    privacy_reduction = ((ncp_before - ncp_after) / ncp_before) * 100 if ncp_before > 0 else 0
+    print(f"NCP Before Generalization: {ncp_before:.4f}")
+    print(f"NCP After Generalization: {ncp_after:.4f}")
+    print(f"Privacy Risk Reduction: {privacy_reduction:.2f}%")
     
-    for group in intersectional_groups:
-        race_group, gender_group = group
-        indices = (sensitive_attr.astype(str) == race_group) & (intersectional_attr.astype(str) == gender_group)
-        num_samples = np.sum(indices)
-        print(f"Total samples in intersectional subgroup {group}: {num_samples}")
-        
-        if num_samples > 0:
-            acc = accuracy_score(y_true[indices], y_pred[indices])
-            print(f"Accuracy for {group}: {acc:.4f}")
-        else:
-            acc = 0
-            print(f"No samples available for {group}, setting accuracy to 0.")
-        
-        intersectional_metrics[group] = acc
+    if privacy_reduction < 20:
+        print("WARNING: Privacy risk reduction is less than 20%, which does not meet the expected threshold.")
+    else:
+        print("Privacy risk reduction meets the expected threshold.")
     
-    print("Final Intersectional Fairness Metrics:")
-    print(intersectional_metrics)
-    
-    return metrics, disparate_impact, intersectional_metrics
+    return metrics, disparate_impact, privacy_reduction
 
-def test_fairness_stability():
+def test_fairness_and_privacy_stability():
     """
-    Perform fairness stability testing over multiple random dataset splits with intersectional fairness analysis and test set evaluation.
+    Perform fairness and privacy stability testing over multiple random dataset splits.
     """
-    print("Running fairness stability test with multiple dataset splits...")
+    print("Running fairness and privacy stability test with multiple dataset splits...")
     disparate_impact_scores = []
+    privacy_reductions = []
     
     for i in range(NUM_SPLITS):
         print(f"Iteration {i+1}/{NUM_SPLITS}: Selecting a new random sample...")
@@ -354,9 +341,6 @@ def test_fairness_stability():
         x_train, x_test = pd.DataFrame(x_train, columns=features), pd.DataFrame(x_test, columns=features)
         
         sensitive_attr = x_train['race'].values
-        intersectional_attr = x_train['sex'].values  # Adding gender for intersectional fairness
-        
-        print(f"Unique gender values before preprocessing: {np.unique(intersectional_attr)}")
         
         categorical_features = ['workclass', 'marital-status', 'occupation', 'relationship', 'race', 'sex',
                                 'hours-per-week', 'native-country']
@@ -370,16 +354,29 @@ def test_fairness_stability():
         if predictions.shape[1] > 1:
             predictions = np.argmax(predictions, axis=1)
         
-        metrics, di, intersectional_metrics = compute_fairness_metrics(y_test, predictions, x_test['race'].values, x_test['sex'].values)
+        # Compute NCP scores before and after generalization
+        gen = GeneralizeToRepresentative(model, target_accuracy=0.95)
+        gen.fit(dataset=ArrayDataset(x_train, y_train, features_names=features))
+        ncp_before = gen.ncp.fit_score
+        gen.transform(dataset=ArrayDataset(x_test))
+        ncp_after = gen.ncp.transform_score
+        
+        metrics, di, privacy_reduction = compute_fairness_and_privacy_metrics(y_test, predictions, x_test['race'].values, ncp_before, ncp_after)
         disparate_impact_scores.append(di)
+        privacy_reductions.append(privacy_reduction)
     
     print(f"Disparate Impact: Mean = {np.mean(disparate_impact_scores):.4f}, Worst Case = {min(disparate_impact_scores):.4f}")
+    print(f"Privacy Risk Reduction: Mean = {np.mean(privacy_reductions):.2f}%, Worst Case = {min(privacy_reductions):.2f}%")
     
     if min(disparate_impact_scores) < 0.8:
         print("WARNING: Fairness results are unstable across dataset splits.")
     else:
         print("Fairness is stable across dataset splits.")
-
+    
+    if min(privacy_reductions) < 20:
+        print("WARNING: Privacy risk reduction is unstable across dataset splits.")
+    else:
+        print("Privacy risk reduction is consistent across dataset splits.")
 
 
 
