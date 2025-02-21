@@ -45,10 +45,20 @@ from apt.anonymization import Anonymize
 from apt.utils.dataset_utils import get_adult_dataset_pd
 from apt.utils.datasets import ArrayDataset
 
+import numpy as np
+import pandas as pd
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.preprocessing import OneHotEncoder
+from sklearn.compose import ColumnTransformer
+from sklearn.pipeline import Pipeline
+from apt.anonymization import Anonymize
+from apt.utils.dataset_utils import get_adult_dataset_pd
+from apt.utils.datasets import ArrayDataset
+
 def test_feature_importance_shift():
     """
     Evaluates how k-anonymization affects feature importance in a Decision Tree model.
-    Fixes the issue by encoding categorical features before training.
+    Fixes the issue by encoding categorical features before training AND before anonymization.
     """
 
     print("\n===== STARTING TEST: Feature Importance Shift Due to Anonymization =====\n")
@@ -114,11 +124,16 @@ def test_feature_importance_shift():
     print(f" - Selected Quasi-Identifiers: {quasi_identifiers}")
     print(" - Applying anonymization...\n")
 
-    anonymizer = Anonymize(k, quasi_identifiers, categorical_features=quasi_identifiers)
-    anonymized_data = anonymizer.anonymize(ArrayDataset(x_train, y_train, feature_names))
+    # Apply the SAME transformation to the anonymized dataset BEFORE feeding into `Anonymize`
+    x_train_encoded_df = pd.DataFrame(x_train_encoded, columns=encoded_feature_names)
 
-    # Apply same transformation to anonymized data
-    anonymized_encoded = preprocessor.transform(anonymized_data)
+    anonymizer = Anonymize(k, quasi_identifiers, categorical_features=quasi_identifiers)
+
+    # Convert anonymized dataset to numerical format using pre-trained encoder
+    anonymized_data = anonymizer.anonymize(ArrayDataset(x_train_encoded_df, y_train, encoded_feature_names))
+
+    # Apply same transformation to anonymized data (ensuring feature consistency)
+    anonymized_encoded = np.array(anonymized_data, dtype=np.float64)  # Convert back to numerical format
 
     # Step 5: Train Decision Tree on Anonymized Data
     print("[Step 5] Training Decision Tree Classifier on anonymized dataset...")
@@ -164,8 +179,5 @@ def test_feature_importance_shift():
 
     print("\n===== TEST COMPLETE: Feature Importance Shift Analysis Finished =====\n")
 
-
-# Run the fixed test
-test_feature_importance_shift()
 
 
