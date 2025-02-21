@@ -251,10 +251,10 @@ from sklearn.preprocessing import OneHotEncoder
 from sklearn.tree import DecisionTreeClassifier, DecisionTreeRegressor
 from sklearn.metrics import accuracy_score, confusion_matrix, brier_score_loss
 from scipy.stats import chi2_contingency
+from scipy.special import expit
 
 from torch import nn, optim, sigmoid, where
 from torch.nn import functional
-from scipy.special import expit
 
 import tensorflow as tf
 from tensorflow.keras.models import Sequential
@@ -276,8 +276,11 @@ ACCURACY_DIFF = 0.05  # Maximum allowed accuracy difference after anonymization
 def compute_fairness_metrics(y_true, y_pred, y_pred_proba, sensitive_attr):
     """
     Compute fairness metrics: statistical significance, equal FPR/FNR, and calibration fairness.
+    Print all intermediate calculations with explanations.
     """
+    print("\nComputing fairness metrics...")
     subgroups = np.unique(sensitive_attr)
+    print(f"Identified {len(subgroups)} unique subgroups in sensitive attribute.")
     counts, metrics = [], {}
     
     for subgroup in subgroups:
@@ -285,39 +288,68 @@ def compute_fairness_metrics(y_true, y_pred, y_pred_proba, sensitive_attr):
         tn, fp, fn, tp = confusion_matrix(y_true[indices], y_pred[indices]).ravel()
         fpr, fnr = fp / (fp + tn), fn / (fn + tp)
         brier = brier_score_loss(y_true[indices], y_pred_proba[indices])
-        metrics[subgroup] = (accuracy_score(y_true[indices], y_pred[indices]), fpr, fnr, brier)
+        acc = accuracy_score(y_true[indices], y_pred[indices])
+        
+        print(f"Subgroup: {subgroup}")
+        print(f"Total samples: {np.sum(indices)}")
+        print(f"True Positives (TP): {tp}, False Positives (FP): {fp}")
+        print(f"False Negatives (FN): {fn}, True Negatives (TN): {tn}")
+        print(f"Accuracy: {acc:.4f}, FPR: {fpr:.4f}, FNR: {fnr:.4f}, Brier Score: {brier:.4f}\n")
+        
+        metrics[subgroup] = (acc, fpr, fnr, brier)
         counts.append([tp + fn, fp + tn])
     
+    # Perform Chi-Square Test for statistical significance
     _, p_value, _, _ = chi2_contingency(counts)
+    print(f"Chi-Square Test p-value: {p_value:.6f}")
     assert p_value < 0.05, "Test failed: Statistically significant fairness violation detected!"
-    assert max(m[1] for m in metrics.values()) - min(m[1] for m in metrics.values()) < 0.01, "Test failed: False Positive Rate disparity!"
-    assert max(m[2] for m in metrics.values()) - min(m[2] for m in metrics.values()) < 0.01, "Test failed: False Negative Rate disparity!"
-    assert max(m[3] for m in metrics.values()) - min(m[3] for m in metrics.values()) < 0.01, "Test failed: Calibration disparity!"
+    
+    # Enforce fairness constraints
+    max_fpr, min_fpr = max(m[1] for m in metrics.values()), min(m[1] for m in metrics.values())
+    max_fnr, min_fnr = max(m[2] for m in metrics.values()), min(m[2] for m in metrics.values())
+    max_brier, min_brier = max(m[3] for m in metrics.values()), min(m[3] for m in metrics.values())
+    
+    assert max_fpr - min_fpr < 0.01, "Test failed: False Positive Rate disparity detected!"
+    assert max_fnr - min_fnr < 0.01, "Test failed: False Negative Rate disparity detected!"
+    assert max_brier - min_brier < 0.01, "Test failed: Calibration disparity detected!"
 
 def test_minimize_pandas_adult():
     """
     Test the GeneralizeToRepresentative minimization process with statistical fairness checks.
     """
+    print("\nLoading the Adult dataset...")
     (x_train, y_train), _ = get_adult_dataset_pd()
     x_train, y_train = x_train.head(1000), y_train.head(1000)
     features = ['age', 'workclass', 'education-num', 'marital-status', 'occupation', 'relationship', 'race', 'sex',
                 'capital-gain', 'capital-loss', 'hours-per-week', 'native-country']
     x_train = pd.DataFrame(x_train, columns=features)
     sensitive_attr = x_train['race'].values
+    
+    print("\nDefining categorical and numeric features...")
     categorical_features = ['workclass', 'marital-status', 'occupation', 'relationship', 'race', 'sex', 'hours-per-week', 'native-country']
     numeric_features = [f for f in features if f not in categorical_features]
     preprocessor, encoded = create_encoder(numeric_features, categorical_features, x_train)
+    
+    print("\nTraining Decision Tree Classifier...")
     model = SklearnClassifier(DecisionTreeClassifier(random_state=0, min_samples_split=2, min_samples_leaf=1), CLASSIFIER_SINGLE_OUTPUT_CLASS_PROBABILITIES)
     model.fit(ArrayDataset(encoded, y_train))
+    
+    print("\nMaking predictions...")
     y_pred = model.predict(ArrayDataset(encoded))
     y_pred = np.argmax(y_pred, axis=1) if y_pred.shape[1] > 1 else y_pred
-    y_pred_proba = model.predict_proba(ArrayDataset(encoded))[:, 1]
+    
+    # Approximate probability by applying sigmoid if the model outputs logits
+    y_pred_proba = expit(y_pred) if y_pred.ndim > 1 else y_pred
+    
     compute_fairness_metrics(y_train, y_pred, y_pred_proba, sensitive_attr)
+    
+    print("\nApplying GeneralizeToRepresentative minimization...")
     gen = GeneralizeToRepresentative(model, target_accuracy=0.7, categorical_features=categorical_features, features_to_minimize=features, encoder=preprocessor)
     gen.fit(dataset=ArrayDataset(x_train, y_pred, features_names=features))
     transformed = gen.transform(dataset=ArrayDataset(x_train))
+    
+    print("\nComputing fairness metrics after generalization...")
     compute_fairness_metrics(y_train, y_pred, y_pred_proba, sensitive_attr)
-
 
 
 
