@@ -213,40 +213,27 @@ def check_ncp(ncp, expected_generalizations):
     if len(expected_generalizations['ranges'].keys()) > 0 or len(expected_generalizations['categories'].keys()) > 0:
         assert (ncp > 0.0)
 
-import pytest
-import numpy as np
-import pandas as pd
-import scipy
+def create_encoder(numeric_features, categorical_features, x):
+    numeric_transformer = Pipeline(
+        steps=[('imputer', SimpleImputer(strategy='constant', fill_value=0))]
+    )
 
-from sklearn.compose import ColumnTransformer
-from sklearn.datasets import load_diabetes
-from sklearn.impute import SimpleImputer
-from sklearn.model_selection import train_test_split
-from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import OneHotEncoder
-from sklearn.tree import DecisionTreeClassifier, DecisionTreeRegressor
+    categorical_transformer = OneHotEncoder(handle_unknown="ignore")
 
-from torch import nn, optim, sigmoid, where
-from torch.nn import functional
-from scipy.special import expit
+    preprocessor = ColumnTransformer(
+        transformers=[
+            ("num", numeric_transformer, numeric_features),
+            ("cat", categorical_transformer, categorical_features),
+        ]
+    )
+    encoded = preprocessor.fit_transform(x)
+    if scipy.sparse.issparse(encoded):
+        pd.DataFrame.sparse.from_spmatrix(encoded)
+    else:
+        encoded = pd.DataFrame(encoded)
 
-import tensorflow as tf
-from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import Dense, Input
-
-from apt.utils.datasets.datasets import PytorchData
-from apt.utils.models.pytorch_model import PyTorchClassifier
-from apt.minimization import GeneralizeToRepresentative
-from apt.utils.dataset_utils import get_iris_dataset_np, get_adult_dataset_pd, get_german_credit_dataset_pd
-from apt.utils.datasets import ArrayDataset
-from apt.utils.models import SklearnClassifier, SklearnRegressor, KerasClassifier, \
-    CLASSIFIER_SINGLE_OUTPUT_CLASS_PROBABILITIES, CLASSIFIER_SINGLE_OUTPUT_CATEGORICAL, \
-    CLASSIFIER_SINGLE_OUTPUT_CLASS_LOGITS, CLASSIFIER_MULTI_OUTPUT_BINARY_LOGITS
-
-tf.compat.v1.disable_eager_execution()
-
-ACCURACY_DIFF = 0.05  # Maximum allowed accuracy difference after anonymization
-
+    return preprocessor, encoded
+    
 def test_minimize_pandas_adult():
     """
     Test the GeneralizeToRepresentative minimization process on the Adult dataset.
