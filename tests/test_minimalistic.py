@@ -280,9 +280,9 @@ def compute_fairness_metrics(y_true, y_pred, sensitive_attr, intersectional_attr
     """
     print("Computing fairness metrics...")
     subgroups = np.unique(sensitive_attr)
-    intersectional_groups = np.unique(list(zip(sensitive_attr, intersectional_attr)))
+    intersectional_groups = np.unique(list(zip(sensitive_attr.astype(str), intersectional_attr.astype(str))))
     
-    print(f"Identified {len(subgroups)} subgroups in sensitive attribute.")
+    print(f"Identified {len(subgroups)} subgroups in sensitive attribute: {np.unique(sensitive_attr)}")
     print(f"Identified {len(np.unique(intersectional_attr))} unique gender categories: {np.unique(intersectional_attr)}")
     metrics = {}
     
@@ -318,7 +318,8 @@ def compute_fairness_metrics(y_true, y_pred, sensitive_attr, intersectional_attr
     intersectional_metrics = {}
     
     for group in intersectional_groups:
-        indices = (sensitive_attr == group[0]) & (intersectional_attr == group[1])
+        race_group, gender_group = group
+        indices = (sensitive_attr.astype(str) == race_group) & (intersectional_attr.astype(str) == gender_group)
         num_samples = np.sum(indices)
         print(f"Total samples in intersectional subgroup {group}: {num_samples}")
         
@@ -378,6 +379,7 @@ def test_fairness_stability():
         print("WARNING: Fairness results are unstable across dataset splits.")
     else:
         print("Fairness is stable across dataset splits.")
+
 
 
 
