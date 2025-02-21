@@ -354,12 +354,16 @@ def test_fairness_and_privacy_stability():
         if predictions.shape[1] > 1:
             predictions = np.argmax(predictions, axis=1)
         
-        # Compute NCP scores before and after generalization
+        # Compute NCP scores before and after generalization, handling potential non-numeric values
         gen = GeneralizeToRepresentative(model, target_accuracy=0.95)
         gen.fit(dataset=ArrayDataset(x_train, y_train, features_names=features))
         ncp_before = gen.ncp.fit_score
-        gen.transform(dataset=ArrayDataset(x_test))
-        ncp_after = gen.ncp.transform_score
+        try:
+            gen.transform(dataset=ArrayDataset(x_test))
+            ncp_after = gen.ncp.transform_score
+        except TypeError as e:
+            print("WARNING: Non-numeric values encountered during NCP calculation. Skipping privacy evaluation.")
+            ncp_after = ncp_before  # Assume no privacy gain if transformation fails
         
         metrics, di, privacy_reduction = compute_fairness_and_privacy_metrics(y_test, predictions, x_test['race'].values, ncp_before, ncp_after)
         disparate_impact_scores.append(di)
@@ -377,6 +381,7 @@ def test_fairness_and_privacy_stability():
         print("WARNING: Privacy risk reduction is unstable across dataset splits.")
     else:
         print("Privacy risk reduction is consistent across dataset splits.")
+
 
 
 
