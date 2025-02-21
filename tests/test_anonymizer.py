@@ -358,78 +358,117 @@ def test_anonymize_ndarray_one_hot():
     """
     Test function to apply k-anonymization on a NumPy array with one-hot encoded quasi-identifiers (QI).
     Ensures that the number of unique QI values is reduced and maintains the integrity of non-QI features.
+    This function provides **detailed** logging for each step and prints intermediate outputs.
     """
 
-    # Define the training dataset (features)
-    # The dataset has four columns: 
-    # - First column: Age (numeric)
-    # - Second & Third columns: One-hot encoded categorical feature (e.g., gender: male/female)
-    # - Fourth column: Another numeric feature (e.g., height)
-    x_train = np.array([[23, 0, 1, 165],
-                        [45, 0, 1, 158],
-                        [56, 1, 0, 123],
-                        [67, 0, 1, 154],
-                        [45, 1, 0, 149],
-                        [42, 1, 0, 166],
-                        [73, 0, 1, 172],
-                        [94, 0, 1, 168],
-                        [69, 0, 1, 175],
-                        [24, 1, 0, 181],
-                        [18, 1, 0, 190]])
+    print("\n===== STARTING TEST: Anonymizing One-Hot Encoded NumPy Data =====\n")
 
-    # Define the target labels (binary classification)
+    # Step 1: Define the training dataset (features)
+    # Each row represents a data entry with four features:
+    # - First column: Age (numeric)
+    # - Second & Third columns: One-hot encoded categorical feature (e.g., gender: male=0, female=1)
+    # - Fourth column: Another numeric feature (e.g., height)
+    x_train = np.array([
+        [23, 0, 1, 165],  # Male, 23 years old, 165 cm
+        [45, 0, 1, 158],  # Male, 45 years old, 158 cm
+        [56, 1, 0, 123],  # Female, 56 years old, 123 cm
+        [67, 0, 1, 154],  # Male, 67 years old, 154 cm
+        [45, 1, 0, 149],  # Female, 45 years old, 149 cm
+        [42, 1, 0, 166],  # Female, 42 years old, 166 cm
+        [73, 0, 1, 172],  # Male, 73 years old, 172 cm
+        [94, 0, 1, 168],  # Male, 94 years old, 168 cm
+        [69, 0, 1, 175],  # Male, 69 years old, 175 cm
+        [24, 1, 0, 181],  # Female, 24 years old, 181 cm
+        [18, 1, 0, 190],  # Female, 18 years old, 190 cm
+    ])
+
+    # Step 2: Define the target labels (binary classification)
     # These labels indicate whether a sample belongs to class 1 or class 0.
     y_train = np.array([1, 1, 0, 1, 0, 0, 1, 1, 0, 1, 0])
 
-    # Initialize a Decision Tree classifier
+    # Print the first 20 original data entries before processing
+    print("\nOriginal Data (First 20 Samples):\n", x_train)
+
+    # Step 3: Train a Decision Tree model on the dataset
     model = DecisionTreeClassifier()
+    model.fit(x_train, y_train)  # Train the model using x_train as input and y_train as labels
 
-    # Train the model on the dataset (x_train as input features, y_train as labels)
-    model.fit(x_train, y_train)
-
-    # Generate predictions using the trained model
+    # Step 4: Generate predictions using the trained model
     pred = model.predict(x_train)
 
-    # Define the k-anonymity threshold (minimum number of samples per anonymized group)
-    k = 10
+    # Print the first 20 predicted labels
+    print("\nPredicted Labels (First 20 Samples):\n", pred)
 
-    # Define quasi-identifiers (QI) - features that should be anonymized
-    # In this case, the first three columns are selected as QI
-    QI = [0, 1, 2]
+    # Step 5: Define k-anonymity threshold (minimum number of samples per anonymized group)
+    k = 10  # Each group must have at least k samples
 
-    # Define QI slices (groups of features that should be treated together for anonymization)
-    QI_slices = [[1, 2]]  # The second and third columns are grouped for anonymization.
+    # Step 6: Define quasi-identifiers (QI) - features that should be anonymized
+    QI = [0, 1, 2]  # Choosing Age, Gender (one-hot), and another one-hot feature as quasi-identifiers
 
-    # Initialize the Anonymizer with k-anonymity enforcement
+    # Step 7: Define QI slices (groups of features that should be treated together for anonymization)
+    QI_slices = [[1, 2]]  # The second and third columns (one-hot encoded) should be anonymized together
+
+    # Step 8: Initialize the Anonymizer with k-anonymity enforcement
     anonymizer = Anonymize(k, QI, train_only_QI=True, quasi_identifer_slices=QI_slices)
 
-    # Apply anonymization to the dataset
+    print("\nApplying Anonymization Process...\n")
+
+    # Step 9: Apply anonymization to the dataset
     anon = anonymizer.anonymize(ArrayDataset(x_train, pred))
 
-    # Assertion 1: Ensure the number of unique QI combinations is reduced after anonymization
-    assert (len(np.unique(anon[:, QI], axis=0)) < len(np.unique(x_train[:, QI], axis=0)))
+    # Step 10: Print the first 20 anonymized samples
+    print("\nAnonymized Data (First 20 Samples):\n", anon[:20])
 
-    # Count occurrences of each unique QI combination in the anonymized dataset
+    # Step 11: Check if the number of unique QI combinations has been reduced
+    unique_QI_before = len(np.unique(x_train[:, QI], axis=0))
+    unique_QI_after = len(np.unique(anon[:, QI], axis=0))
+    print("\nUnique QI Combinations Before Anonymization:", unique_QI_before)
+    print("Unique QI Combinations After Anonymization:", unique_QI_after)
+
+    # Assertion 1: Ensure that the number of unique QI combinations is reduced
+    assert unique_QI_after < unique_QI_before, "Anonymization failed to reduce QI uniqueness"
+
+    # Step 12: Count occurrences of each unique QI combination in the anonymized dataset
     _, counts_elements = np.unique(anon[:, QI], return_counts=True)
 
-    # Assertion 2: Ensure that each group has at least 'k' records (k-anonymity constraint)
-    assert (np.min(counts_elements) >= k)
+    # Print the distribution of records per unique QI combination
+    print("\nAnonymized Data - Frequency of Unique QI Combinations:\n", counts_elements)
 
-    # Assertion 3: Ensure that non-QI features (columns outside QI) remain unchanged
-    assert ((np.delete(anon, QI, axis=1) == np.delete(x_train, QI, axis=1)).all())
+    # Step 13: Ensure that each group has at least 'k' records (k-anonymity constraint)
+    min_group_size = np.min(counts_elements)
+    print("\nSmallest Anonymized Group Size:", min_group_size)
+    assert min_group_size >= k, "Anonymization failed: Some groups have fewer than k records"
 
-    # Extract the anonymized slice of QI values that were grouped together
+    # Step 14: Ensure that non-QI features remain unchanged
+    unchanged_features_check = np.delete(anon, QI, axis=1) == np.delete(x_train, QI, axis=1)
+    print("\nNon-QI Features Unchanged:", np.all(unchanged_features_check))
+    assert np.all(unchanged_features_check), "Anonymization incorrectly modified non-QI features"
+
+    # Step 15: Extract the anonymized slice of QI values that were grouped together
     anonymized_slice = anon[:, QI_slices[0]]
 
-    # Assertion 4: Ensure that one-hot encoded QI slices still represent valid categories
-    # Each row should have exactly **one** active category (sum of each row in the slice should be 1)
-    assert ((np.sum(anonymized_slice, axis=1) == 1).all())
+    # Step 16: Ensure that one-hot encoded QI slices still represent valid categories
+    sum_of_each_row = np.sum(anonymized_slice, axis=1)
+    max_value_each_row = np.max(anonymized_slice, axis=1)
+    min_value_each_row = np.min(anonymized_slice, axis=1)
 
-    # Assertion 5: Ensure that each row has a max value of 1 (valid one-hot encoding)
-    assert ((np.max(anonymized_slice, axis=1) == 1).all())
+    # Print one-hot encoding validation checks
+    print("\nOne-Hot Encoding Check:")
+    print(" - Sum of each row (should be 1):", sum_of_each_row)
+    print(" - Max value per row (should be 1):", max_value_each_row)
+    print(" - Min value per row (should be 0):", min_value_each_row)
 
-    # Assertion 6: Ensure that each row has a min value of 0 (valid one-hot encoding)
-    assert ((np.min(anonymized_slice, axis=1) == 0).all())
+    # Assertion 4: Each row should have exactly **one** active category (sum should be 1)
+    assert (sum_of_each_row == 1).all(), "One-hot encoding constraint violated: Row sum is not 1"
+
+    # Assertion 5: Each row should have a max value of 1 (valid one-hot encoding)
+    assert (max_value_each_row == 1).all(), "One-hot encoding constraint violated: Max value per row is not 1"
+
+    # Assertion 6: Each row should have a min value of 0 (valid one-hot encoding)
+    assert (min_value_each_row == 0).all(), "One-hot encoding constraint violated: Min value per row is not 0"
+
+    print("\n===== TEST PASSED: Anonymization Successful and Data Integrity Maintained =====\n")
+
 
 
 
