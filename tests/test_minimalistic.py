@@ -273,19 +273,20 @@ tf.compat.v1.disable_eager_execution()
 ACCURACY_DIFF = 0.05  # Maximum allowed accuracy difference after anonymization
 NUM_SPLITS = 10  # Number of random splits for fairness stability testing
 
-def compute_fairness_metrics(y_true, y_pred, sensitive_attr, intersectional_attr=None):
+def compute_fairness_metrics(y_true, y_pred, sensitive_attr, intersectional_attr):
     """
     Compute fairness metrics including accuracy per subgroup and disparate impact.
-    Also performs intersectional fairness analysis if an additional attribute is provided.
+    Also performs intersectional fairness analysis correctly.
     """
     print("Computing fairness metrics...")
     subgroups = np.unique(sensitive_attr)
+    intersectional_groups = np.unique(list(zip(sensitive_attr, intersectional_attr)))
+    
     print(f"Identified {len(subgroups)} subgroups in sensitive attribute.")
     metrics = {}
     
     for subgroup in subgroups:
         indices = (sensitive_attr == subgroup)
-        print(f"Calculating accuracy for subgroup: {subgroup}")
         num_samples = np.sum(indices)
         print(f"Total samples in subgroup {subgroup}: {num_samples}")
         
@@ -312,46 +313,44 @@ def compute_fairness_metrics(y_true, y_pred, sensitive_attr, intersectional_attr
         print("Fairness check passed. No severe disparities detected.")
     
     # Intersectional Fairness Analysis
-    if intersectional_attr is not None:
-        print("Performing intersectional fairness analysis...")
-        intersectional_groups = np.unique(list(zip(sensitive_attr, intersectional_attr)))
-        intersectional_metrics = {}
-        
-        for group in intersectional_groups:
-            indices = (sensitive_attr == group[0]) & (intersectional_attr == group[1])
-            num_samples = np.sum(indices)
-            print(f"Total samples in intersectional subgroup {group}: {num_samples}")
-            
-            if num_samples > 0:
-                acc = accuracy_score(y_true[indices], y_pred[indices])
-                print(f"Accuracy for {group}: {acc:.4f}")
-            else:
-                acc = 0
-                print(f"No samples available for {group}, setting accuracy to 0.")
-            
-            intersectional_metrics[group] = acc
-        
-        print("Final Intersectional Fairness Metrics:")
-        print(intersectional_metrics)
+    print("Performing intersectional fairness analysis...")
+    intersectional_metrics = {}
     
-    return metrics, disparate_impact
+    for group in intersectional_groups:
+        indices = (sensitive_attr == group[0]) & (intersectional_attr == group[1])
+        num_samples = np.sum(indices)
+        print(f"Total samples in intersectional subgroup {group}: {num_samples}")
+        
+        if num_samples > 0:
+            acc = accuracy_score(y_true[indices], y_pred[indices])
+            print(f"Accuracy for {group}: {acc:.4f}")
+        else:
+            acc = 0
+            print(f"No samples available for {group}, setting accuracy to 0.")
+        
+        intersectional_metrics[group] = acc
+    
+    print("Final Intersectional Fairness Metrics:")
+    print(intersectional_metrics)
+    
+    return metrics, disparate_impact, intersectional_metrics
 
 def test_fairness_stability():
     """
-    Perform fairness stability testing over multiple random dataset splits with intersectional fairness analysis.
+    Perform fairness stability testing over multiple random dataset splits with intersectional fairness analysis and test set evaluation.
     """
     print("Running fairness stability test with multiple dataset splits...")
     disparate_impact_scores = []
-    subgroup_accuracies = {subgroup: [] for subgroup in ['Amer-Indian-Eskimo', 'Asian-Pac-Islander', 'Black', 'Other', 'White']}
     
     for i in range(NUM_SPLITS):
         print(f"Iteration {i+1}/{NUM_SPLITS}: Selecting a new random sample...")
-        (x_train, y_train), _ = get_adult_dataset_pd()
-        x_train, _, y_train, _ = train_test_split(x_train, y_train, train_size=1000, stratify=y_train, random_state=i)
+        (x, y), _ = get_adult_dataset_pd()
+        x_train, x_test, y_train, y_test = train_test_split(x, y, train_size=0.8, stratify=y, random_state=i)
         
         features = ['age', 'workclass', 'education-num', 'marital-status', 'occupation', 'relationship', 'race', 'sex',
                     'capital-gain', 'capital-loss', 'hours-per-week', 'native-country']
-        x_train = pd.DataFrame(x_train, columns=features)
+        x_train, x_test = pd.DataFrame(x_train, columns=features), pd.DataFrame(x_test, columns=features)
+        
         sensitive_attr = x_train['race'].values
         intersectional_attr = x_train['sex'].values  # Adding gender for intersectional fairness
         
@@ -363,23 +362,18 @@ def test_fairness_stability():
         base_est = DecisionTreeClassifier(random_state=0, min_samples_split=2, min_samples_leaf=1)
         model = SklearnClassifier(base_est, CLASSIFIER_SINGLE_OUTPUT_CLASS_PROBABILITIES)
         model.fit(ArrayDataset(encoded, y_train))
-        predictions = model.predict(ArrayDataset(encoded))
+        predictions = model.predict(ArrayDataset(preprocessor.transform(x_test)))
         if predictions.shape[1] > 1:
             predictions = np.argmax(predictions, axis=1)
         
-        metrics, di = compute_fairness_metrics(y_train, predictions, sensitive_attr, intersectional_attr)
+        metrics, di, intersectional_metrics = compute_fairness_metrics(y_test, predictions, x_test['race'].values, x_test['sex'].values)
         disparate_impact_scores.append(di)
-        for subgroup, acc in metrics.items():
-            if subgroup in subgroup_accuracies:
-                subgroup_accuracies[subgroup].append(acc)
     
-    print("Final Fairness Stability Results:")
-    for subgroup, accuracies in subgroup_accuracies.items():
-        print(f"{subgroup}: Mean Accuracy = {np.mean(accuracies):.4f}, Std Dev = {np.std(accuracies):.4f}")
     print(f"Disparate Impact: Mean = {np.mean(disparate_impact_scores):.4f}, Worst Case = {min(disparate_impact_scores):.4f}")
     
     if min(disparate_impact_scores) < 0.8:
         print("WARNING: Fairness results are unstable across dataset splits.")
     else:
         print("Fairness is stable across dataset splits.")
+
 
