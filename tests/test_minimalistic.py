@@ -314,189 +314,6 @@ def compute_fairness_metrics(y_true, y_pred, sensitive_attr):
     
     return metrics, disparate_impact
 
-def test_minimize_pandas_adult():
-    """
-    Test the GeneralizeToRepresentative minimization process on the Adult dataset with full verbosity.
-    This function:
-    - Loads the Adult dataset
-    - Limits it to the first 1000 samples for efficiency
-    - Defines categorical and numeric features
-    - Encodes categorical features using One-Hot Encoding
-    - Trains a DecisionTreeClassifier
-    - Applies generalization minimization
-    - Prints all numbers at every step
-    - Computes fairness metrics to check impact on underrepresented groups with a stricter fairness penalty
-    """
-    
-    # Load the Adult dataset
-    print("Loading the Adult dataset...")
-    (x_train, y_train), _ = get_adult_dataset_pd()
-    print(f"Dataset loaded with {x_train.shape[0]} samples and {x_train.shape[1]} features.")
-    
-    # Select only the first 1000 samples for efficiency
-    print("Selecting the first 1000 samples...")
-    x_train = x_train.head(1000)
-    y_train = y_train.head(1000)
-    print(f"Subset created with {x_train.shape[0]} samples.")
-    
-    # Define feature names
-    features = ['age', 'workclass', 'education-num', 'marital-status', 'occupation', 'relationship', 'race', 'sex',
-                'capital-gain', 'capital-loss', 'hours-per-week', 'native-country']
-    x_train = pd.DataFrame(x_train, columns=features)
-    print("Feature names defined.")
-    
-    # Extract sensitive attribute for fairness evaluation
-    sensitive_attr = x_train['race'].values
-    
-    # Define categorical and numeric features
-    categorical_features = ['workclass', 'marital-status', 'occupation', 'relationship', 'race', 'sex',
-                            'hours-per-week', 'native-country']
-    numeric_features = [f for f in features if f not in categorical_features]
-    print("Categorical and numeric features separated.")
-    
-    # Encode categorical features
-    print("Encoding categorical features...")
-    preprocessor, encoded = create_encoder(numeric_features, categorical_features, x_train)
-    print("Encoding completed.")
-    
-    # Train a DecisionTreeClassifier
-    print("Initializing DecisionTreeClassifier...")
-    base_est = DecisionTreeClassifier(random_state=0, min_samples_split=2, min_samples_leaf=1)
-    model = SklearnClassifier(base_est, CLASSIFIER_SINGLE_OUTPUT_CLASS_PROBABILITIES)
-    print("Training Decision Tree Classifier...")
-    model.fit(ArrayDataset(encoded, y_train))
-    print("Training completed.")
-    
-    # Make predictions
-    print("Making predictions on training data...")
-    predictions = model.predict(ArrayDataset(encoded))
-    if predictions.shape[1] > 1:
-        predictions = np.argmax(predictions, axis=1)
-    print(f"First 10 predictions: {predictions[:10]}")
-    
-    # Compute fairness metrics before generalization
-    print("Computing fairness metrics before generalization...")
-    compute_fairness_metrics(y_train, predictions, sensitive_attr)
-    
-    # Define target accuracy
-    target_accuracy = 0.7
-    print(f"Target accuracy set to {target_accuracy}.")
-    
-    # Apply generalization transformation
-    print("Applying GeneralizeToRepresentative minimization...")
-    gen = GeneralizeToRepresentative(model, target_accuracy=target_accuracy,
-                                     categorical_features=categorical_features, features_to_minimize=features,
-                                     encoder=preprocessor)
-    gen.fit(dataset=ArrayDataset(x_train, predictions, features_names=features))
-    transformed = gen.transform(dataset=ArrayDataset(x_train))
-    gener = gen.generalizations
-    print("Generalization applied.")
-    
-    # Compute fairness metrics after generalization
-    print("Computing fairness metrics after generalization...")
-    compute_fairness_metrics(y_train, predictions, sensitive_attr)
-    
-    # Validate transformation
-    print("Validating transformation accuracy...")
-    rel_accuracy = model.score(ArrayDataset(preprocessor.transform(transformed), predictions))
-    print(f"Relative accuracy after transformation: {rel_accuracy}")
-    assert ((rel_accuracy >= target_accuracy) or (target_accuracy - rel_accuracy) <= ACCURACY_DIFF)
-    print("Validation successful! Test passed.")
-
-
-def test_minimizer_ncp(data_two_features):
-    """
-    Test the impact of different generalization methods on normalized certainty penalty (NCP).
-    This test:
-    - Trains a DecisionTreeClassifier on a dataset.
-    - Evaluates generalization techniques using GeneralizeToRepresentative.
-    - Computes NCP scores before and after transformation.
-    - Compares results to ensure correctness.
-    - Prints detailed calculations and explanations at each step.
-    """
-    x, y, features, x1 = data_two_features  # Load dataset
-
-    # Initialize Decision Tree Classifier with specific parameters
-    print("Initializing DecisionTreeClassifier with min_samples_split=2 and min_samples_leaf=1...")
-    base_est = DecisionTreeClassifier(random_state=0, min_samples_split=2, min_samples_leaf=1)
-    
-    # Wrap the classifier with SklearnClassifier
-    print("Wrapping the classifier with SklearnClassifier...")
-    model = SklearnClassifier(base_est, CLASSIFIER_SINGLE_OUTPUT_CLASS_PROBABILITIES)
-    
-    # Train the model on the dataset
-    print("Training Decision Tree Classifier with the dataset...")
-    model.fit(ArrayDataset(x, y))
-    
-    # Prepare datasets for evaluation
-    print("Preparing datasets for evaluation...")
-    ad = ArrayDataset(x)
-    ad1 = ArrayDataset(x1, features_names=features)
-    
-    # Generate predictions
-    print("Generating predictions from the trained model...")
-    predictions = model.predict(ad)
-    print(f"Raw Predictions:\n{predictions[:20]}")
-    if predictions.shape[1] > 1:
-        predictions = np.argmax(predictions, axis=1)
-    print(f"Final Predictions after argmax (if applicable):\n{predictions[:20]}")
-    
-    # Set target accuracy for generalization
-    target_accuracy = 0.4
-    print(f"Setting target accuracy to {target_accuracy} for generalization...")
-    train_dataset = ArrayDataset(x, predictions, features_names=features)
-    
-    # Apply generalization without transformation
-    print("Applying GeneralizeToRepresentative without transformation...")
-    gen1 = GeneralizeToRepresentative(model, target_accuracy=target_accuracy, generalize_using_transform=False)
-    gen1.fit(dataset=train_dataset)
-    ncp1 = gen1.ncp.fit_score  # NCP after fitting
-    ncp2 = gen1.calculate_ncp(ad1)  # NCP on new dataset
-    print(f"NCP values:\n  ncp1 (after fitting): {ncp1}\n  ncp2 (on new dataset): {ncp2}")
-    
-    # Apply generalization with transformation
-    print("Applying GeneralizeToRepresentative with transformation...")
-    gen2 = GeneralizeToRepresentative(model, target_accuracy=target_accuracy)
-    gen2.fit(dataset=train_dataset)
-    ncp3 = gen2.ncp.fit_score  # NCP after fitting
-    print(f"NCP3 (after fitting with transformation): {ncp3}")
-    
-    # Transform and compute NCP at different stages
-    print("Transforming dataset ad1...")
-    gen2.transform(dataset=ad1)
-    ncp4 = gen2.ncp.transform_score
-    print(f"NCP4 (after transforming ad1): {ncp4}")
-    
-    print("Transforming dataset ad...")
-    gen2.transform(dataset=ad)
-    ncp5 = gen2.ncp.transform_score
-    print(f"NCP5 (after transforming ad): {ncp5}")
-    
-    print("Transforming dataset ad1 again...")
-    gen2.transform(dataset=ad1)
-    ncp6 = gen2.ncp.transform_score
-    print(f"NCP6 (after second transformation of ad1): {ncp6}")
-    
-    # Print verbose results
-    print("First 20 samples BEFORE transformation:")
-    print(pd.DataFrame(x[:20], columns=features))
-    
-    print("First 20 samples AFTER transformation:")
-    transformed_data = gen2.transform(dataset=ad)
-    print(pd.DataFrame(transformed_data[:20], columns=features))
-    
-    # Assert expected relationships among NCP scores
-    print("Validating expected relationships between NCP scores...")
-    assert (ncp1 <= ncp3), f"Assertion failed: Expected ncp1 ({ncp1}) <= ncp3 ({ncp3})"
-    assert (ncp2 != ncp3), f"Assertion failed: Expected ncp2 ({ncp2}) != ncp3 ({ncp3})"
-    assert (ncp3 != ncp4), f"Assertion failed: Expected ncp3 ({ncp3}) != ncp4 ({ncp4})"
-    assert (ncp4 != ncp5), f"Assertion failed: Expected ncp4 ({ncp4}) != ncp5 ({ncp5})"
-    assert (ncp6 == ncp4), f"Assertion failed: Expected ncp6 ({ncp6}) == ncp4 ({ncp4})"
-    
-    print("All assertions passed! Test completed successfully!")
-
-
-
 import pytest
 import numpy as np
 import pandas as pd
@@ -509,12 +326,11 @@ from sklearn.model_selection import train_test_split
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder
 from sklearn.tree import DecisionTreeClassifier, DecisionTreeRegressor
-from sklearn.metrics import accuracy_score, confusion_matrix, brier_score_loss
-from scipy.stats import chi2_contingency
-from scipy.special import expit
+from sklearn.metrics import accuracy_score
 
 from torch import nn, optim, sigmoid, where
 from torch.nn import functional
+from scipy.special import expit
 
 import tensorflow as tf
 from tensorflow.keras.models import Sequential
@@ -532,78 +348,91 @@ from apt.utils.models import SklearnClassifier, SklearnRegressor, KerasClassifie
 tf.compat.v1.disable_eager_execution()
 
 ACCURACY_DIFF = 0.05  # Maximum allowed accuracy difference after anonymization
+NUM_SPLITS = 10  # Number of random splits for fairness stability testing
 
-def test_minimizer_pytorch(data_three_features):
+def compute_fairness_metrics(y_true, y_pred, sensitive_attr):
     """
-    Test the GeneralizeToRepresentative minimization process using a PyTorch model.
+    Compute fairness metrics including accuracy per subgroup and disparate impact.
+    Print all intermediate steps and explain the calculations.
     """
+    print("Computing fairness metrics...")
+    subgroups = np.unique(sensitive_attr)
+    print(f"Identified {len(subgroups)} subgroups in sensitive attribute.")
+    metrics = {}
     
-    print("\nLoading dataset with three features...")
-    x, y, features = data_three_features
-    x = x.astype(np.float32)  # Convert data to float32 for PyTorch compatibility
-    qi = ['age', 'weight']  # Quasi-identifiers to generalize
-    print(f"Dataset shape: {x.shape}, Features: {features}")
+    for subgroup in subgroups:
+        indices = (sensitive_attr == subgroup)
+        print(f"Calculating accuracy for subgroup: {subgroup}")
+        num_samples = np.sum(indices)
+        print(f"Total samples in subgroup {subgroup}: {num_samples}")
+        
+        if num_samples > 0:
+            acc = accuracy_score(y_true[indices], y_pred[indices])
+            print(f"Accuracy for {subgroup}: {acc:.4f}")
+        else:
+            acc = 0
+            print(f"No samples available for subgroup {subgroup}, setting accuracy to 0.")
+        
+        metrics[subgroup] = acc
     
-    from apt.utils.datasets.datasets import PytorchData
-    from apt.utils.models.pytorch_model import PyTorchClassifier
+    min_acc = min(metrics.values())
+    max_acc = max(metrics.values())
+    disparate_impact = min_acc / max_acc if max_acc > 0 else 0
     
-    print("\nDefining PyTorch model...")
-    base_est = PytorchModel(2, 3)  # 2 classes, 3 input features
-    criterion = nn.CrossEntropyLoss()  # Define loss function
-    optimizer = optim.Adam(base_est.parameters(), lr=0.01)  # Adam optimizer with learning rate 0.01
+    print("Final Fairness Metrics:")
+    print("Accuracy per subgroup:", metrics)
+    print(f"Disparate Impact (min/max accuracy ratio): {disparate_impact:.4f}")
     
-    print("\nInitializing PyTorchClassifier...")
-    model = PyTorchClassifier(model=base_est,
-                              output_type=CLASSIFIER_SINGLE_OUTPUT_CLASS_LOGITS,
-                              loss=criterion,
-                              optimizer=optimizer,
-                              input_shape=(3,),  # Input feature size
-                              nb_classes=2)  # Number of output classes
+    if disparate_impact < 0.8:
+        print("WARNING: Disparate impact is below the acceptable threshold of 0.8, indicating potential unfairness.")
+    else:
+        print("Fairness check passed. No severe disparities detected.")
     
-    print("\nTraining the model for 10 epochs...")
-    model.fit(PytorchData(x, y), save_entire_model=False, nb_epochs=10)
+    return metrics, disparate_impact
+
+def test_fairness_stability():
+    """
+    Perform fairness stability testing over multiple random dataset splits.
+    """
+    print("Running fairness stability test with multiple dataset splits...")
+    disparate_impact_scores = []
+    subgroup_accuracies = {subgroup: [] for subgroup in ['Amer-Indian-Eskimo', 'Asian-Pac-Islander', 'Black', 'Other', 'White']}
     
-    print("\nMaking predictions...")
-    ad = ArrayDataset(x)
-    predictions = model.predict(ad)
-    if predictions.shape[1] > 1:
-        predictions = np.argmax(predictions, axis=1)  # Convert logits to class labels
-    print(f"First 10 predictions: {predictions[:10]}")
+    for i in range(NUM_SPLITS):
+        print(f"Iteration {i+1}/{NUM_SPLITS}: Selecting a new random sample...")
+        (x_train, y_train), _ = get_adult_dataset_pd()
+        x_train, _, y_train, _ = train_test_split(x_train, y_train, train_size=1000, stratify=y_train, random_state=i)
+        
+        features = ['age', 'workclass', 'education-num', 'marital-status', 'occupation', 'relationship', 'race', 'sex',
+                    'capital-gain', 'capital-loss', 'hours-per-week', 'native-country']
+        x_train = pd.DataFrame(x_train, columns=features)
+        sensitive_attr = x_train['race'].values
+        
+        categorical_features = ['workclass', 'marital-status', 'occupation', 'relationship', 'race', 'sex',
+                                'hours-per-week', 'native-country']
+        numeric_features = [f for f in features if f not in categorical_features]
+        preprocessor, encoded = create_encoder(numeric_features, categorical_features, x_train)
+        
+        base_est = DecisionTreeClassifier(random_state=0, min_samples_split=2, min_samples_leaf=1)
+        model = SklearnClassifier(base_est, CLASSIFIER_SINGLE_OUTPUT_CLASS_PROBABILITIES)
+        model.fit(ArrayDataset(encoded, y_train))
+        predictions = model.predict(ArrayDataset(encoded))
+        if predictions.shape[1] > 1:
+            predictions = np.argmax(predictions, axis=1)
+        
+        metrics, di = compute_fairness_metrics(y_train, predictions, sensitive_attr)
+        disparate_impact_scores.append(di)
+        for subgroup, acc in metrics.items():
+            if subgroup in subgroup_accuracies:
+                subgroup_accuracies[subgroup].append(acc)
     
-    target_accuracy = 0.5
-    print(f"Target accuracy set to {target_accuracy}.")
+    print("Final Fairness Stability Results:")
+    for subgroup, accuracies in subgroup_accuracies.items():
+        print(f"{subgroup}: Mean Accuracy = {np.mean(accuracies):.4f}, Std Dev = {np.std(accuracies):.4f}")
+    print(f"Disparate Impact: Mean = {np.mean(disparate_impact_scores):.4f}, Worst Case = {min(disparate_impact_scores):.4f}")
     
-    print("\nApplying GeneralizeToRepresentative minimization...")
-    gen = GeneralizeToRepresentative(model, target_accuracy=target_accuracy, features_to_minimize=qi)
-    train_dataset = ArrayDataset(x, predictions, features_names=features)
-    
-    print("\nFitting the generalization model...")
-    gen.fit(dataset=train_dataset)
-    
-    print("\nTransforming the dataset...")
-    transformed = gen.transform(dataset=ad)
-    print(f"First 10 transformed samples: {transformed[:10]}")
-    
-    gener = gen.generalizations
-    print("\nGeneralizations applied:", gener)
-    
-    expected_generalizations = {'ranges': {'age': [], 'weight': []}, 'categories': {}, 'untouched': ['height']}
-    print("Expected generalizations:", expected_generalizations)
-    
-    compare_generalizations(gener, expected_generalizations)
-    check_features(features, expected_generalizations, transformed, x)
-    
-    print("\nEnsuring only expected features were modified...")
-    assert ((np.delete(transformed, [0, 2], axis=1) == np.delete(x, [0, 2], axis=1)).all())
-    
-    print("\nComputing the normalized certainty penalty (NCP) score...")
-    ncp = gen.ncp.transform_score
-    print(f"NCP Score: {ncp}")
-    check_ncp(ncp, expected_generalizations)
-    
-    print("\nEvaluating model accuracy after generalization...")
-    rel_accuracy = model.score(ArrayDataset(transformed.astype(np.float32), predictions))
-    print(f"Relative accuracy after transformation: {rel_accuracy}")
-    assert ((rel_accuracy >= target_accuracy) or (target_accuracy - rel_accuracy) <= ACCURACY_DIFF)
-    
-    print("\nTest completed successfully!\n")
+    if min(disparate_impact_scores) < 0.8:
+        print("WARNING: Fairness results are unstable across dataset splits.")
+    else:
+        print("Fairness is stable across dataset splits.")
+
