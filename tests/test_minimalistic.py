@@ -233,46 +233,15 @@ def create_encoder(numeric_features, categorical_features, x):
         encoded = pd.DataFrame(encoded)
 
     return preprocessor, encoded
+
+
+
+
     
-import pytest
-import numpy as np
-import pandas as pd
-import scipy
-
-from sklearn.compose import ColumnTransformer
-from sklearn.datasets import load_diabetes
-from sklearn.impute import SimpleImputer
-from sklearn.model_selection import train_test_split
-from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import OneHotEncoder
-from sklearn.tree import DecisionTreeClassifier, DecisionTreeRegressor
-from sklearn.metrics import accuracy_score
-
-from torch import nn, optim, sigmoid, where
-from torch.nn import functional
-from scipy.special import expit
-
-import tensorflow as tf
-from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import Dense, Input
-
-from apt.utils.datasets.datasets import PytorchData
-from apt.utils.models.pytorch_model import PyTorchClassifier
-from apt.minimization import GeneralizeToRepresentative
-from apt.utils.dataset_utils import get_iris_dataset_np, get_adult_dataset_pd, get_german_credit_dataset_pd
-from apt.utils.datasets import ArrayDataset
-from apt.utils.models import SklearnClassifier, SklearnRegressor, KerasClassifier, \
-    CLASSIFIER_SINGLE_OUTPUT_CLASS_PROBABILITIES, CLASSIFIER_SINGLE_OUTPUT_CATEGORICAL, \
-    CLASSIFIER_SINGLE_OUTPUT_CLASS_LOGITS, CLASSIFIER_MULTI_OUTPUT_BINARY_LOGITS
-
-tf.compat.v1.disable_eager_execution()
-
-ACCURACY_DIFF = 0.05  # Maximum allowed accuracy difference after anonymization
-
 def compute_fairness_metrics(y_true, y_pred, sensitive_attr):
     """
-    Compute fairness metrics including accuracy per subgroup and disparate impact.
-    Print all intermediate steps and explain the calculations.
+    Compute fairness metrics including accuracy per subgroup and a stricter disparate impact measure.
+    This version applies a more aggressive penalty for disparities.
     """
     print("Computing fairness metrics...")
     subgroups = np.unique(sensitive_attr)
@@ -296,14 +265,16 @@ def compute_fairness_metrics(y_true, y_pred, sensitive_attr):
     
     min_acc = min(metrics.values())
     max_acc = max(metrics.values())
-    disparate_impact = min_acc / max_acc if max_acc > 0 else 0
+    
+    # Apply stricter penalty: use squared ratio for disparate impact
+    disparate_impact = (min_acc / max_acc) ** 2 if max_acc > 0 else 0
     
     print("Final Fairness Metrics:")
     print("Accuracy per subgroup:", metrics)
-    print(f"Disparate Impact (min/max accuracy ratio): {disparate_impact:.4f}")
+    print(f"Disparate Impact (stricter measure, squared min/max accuracy ratio): {disparate_impact:.4f}")
     
-    if disparate_impact < 0.8:
-        print("WARNING: Disparate impact is below the acceptable threshold of 0.8, indicating potential unfairness.")
+    if disparate_impact < 0.85:
+        print("WARNING: Disparate impact is below the stricter threshold of 0.85, indicating potential unfairness.")
     else:
         print("Fairness check passed. No severe disparities detected.")
     
@@ -320,7 +291,7 @@ def test_minimize_pandas_adult():
     - Trains a DecisionTreeClassifier
     - Applies generalization minimization
     - Prints all numbers at every step
-    - Computes fairness metrics to check impact on underrepresented groups
+    - Computes fairness metrics to check impact on underrepresented groups with a stricter fairness penalty
     """
     
     # Load the Adult dataset
@@ -397,7 +368,6 @@ def test_minimize_pandas_adult():
     print(f"Relative accuracy after transformation: {rel_accuracy}")
     assert ((rel_accuracy >= target_accuracy) or (target_accuracy - rel_accuracy) <= ACCURACY_DIFF)
     print("Validation successful! Test passed.")
-
 
 
 
