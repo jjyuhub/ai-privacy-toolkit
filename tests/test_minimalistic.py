@@ -494,3 +494,116 @@ def test_minimizer_ncp(data_two_features):
     assert (ncp6 == ncp4), f"Assertion failed: Expected ncp6 ({ncp6}) == ncp4 ({ncp4})"
     
     print("All assertions passed! Test completed successfully!")
+
+
+
+import pytest
+import numpy as np
+import pandas as pd
+import scipy
+
+from sklearn.compose import ColumnTransformer
+from sklearn.datasets import load_diabetes
+from sklearn.impute import SimpleImputer
+from sklearn.model_selection import train_test_split
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import OneHotEncoder
+from sklearn.tree import DecisionTreeClassifier, DecisionTreeRegressor
+from sklearn.metrics import accuracy_score, confusion_matrix, brier_score_loss
+from scipy.stats import chi2_contingency
+from scipy.special import expit
+
+from torch import nn, optim, sigmoid, where
+from torch.nn import functional
+
+import tensorflow as tf
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import Dense, Input
+
+from apt.utils.datasets.datasets import PytorchData
+from apt.utils.models.pytorch_model import PyTorchClassifier
+from apt.minimization import GeneralizeToRepresentative
+from apt.utils.dataset_utils import get_iris_dataset_np, get_adult_dataset_pd, get_german_credit_dataset_pd
+from apt.utils.datasets import ArrayDataset
+from apt.utils.models import SklearnClassifier, SklearnRegressor, KerasClassifier, \
+    CLASSIFIER_SINGLE_OUTPUT_CLASS_PROBABILITIES, CLASSIFIER_SINGLE_OUTPUT_CATEGORICAL, \
+    CLASSIFIER_SINGLE_OUTPUT_CLASS_LOGITS, CLASSIFIER_MULTI_OUTPUT_BINARY_LOGITS
+
+tf.compat.v1.disable_eager_execution()
+
+ACCURACY_DIFF = 0.05  # Maximum allowed accuracy difference after anonymization
+
+def test_minimizer_pytorch(data_three_features):
+    """
+    Test the GeneralizeToRepresentative minimization process using a PyTorch model.
+    """
+    
+    print("\nLoading dataset with three features...")
+    x, y, features = data_three_features
+    x = x.astype(np.float32)  # Convert data to float32 for PyTorch compatibility
+    qi = ['age', 'weight']  # Quasi-identifiers to generalize
+    print(f"Dataset shape: {x.shape}, Features: {features}")
+    
+    from apt.utils.datasets.datasets import PytorchData
+    from apt.utils.models.pytorch_model import PyTorchClassifier
+    
+    print("\nDefining PyTorch model...")
+    base_est = PytorchModel(2, 3)  # 2 classes, 3 input features
+    criterion = nn.CrossEntropyLoss()  # Define loss function
+    optimizer = optim.Adam(base_est.parameters(), lr=0.01)  # Adam optimizer with learning rate 0.01
+    
+    print("\nInitializing PyTorchClassifier...")
+    model = PyTorchClassifier(model=base_est,
+                              output_type=CLASSIFIER_SINGLE_OUTPUT_CLASS_LOGITS,
+                              loss=criterion,
+                              optimizer=optimizer,
+                              input_shape=(3,),  # Input feature size
+                              nb_classes=2)  # Number of output classes
+    
+    print("\nTraining the model for 10 epochs...")
+    model.fit(PytorchData(x, y), save_entire_model=False, nb_epochs=10)
+    
+    print("\nMaking predictions...")
+    ad = ArrayDataset(x)
+    predictions = model.predict(ad)
+    if predictions.shape[1] > 1:
+        predictions = np.argmax(predictions, axis=1)  # Convert logits to class labels
+    print(f"First 10 predictions: {predictions[:10]}")
+    
+    target_accuracy = 0.5
+    print(f"Target accuracy set to {target_accuracy}.")
+    
+    print("\nApplying GeneralizeToRepresentative minimization...")
+    gen = GeneralizeToRepresentative(model, target_accuracy=target_accuracy, features_to_minimize=qi)
+    train_dataset = ArrayDataset(x, predictions, features_names=features)
+    
+    print("\nFitting the generalization model...")
+    gen.fit(dataset=train_dataset)
+    
+    print("\nTransforming the dataset...")
+    transformed = gen.transform(dataset=ad)
+    print(f"First 10 transformed samples: {transformed[:10]}")
+    
+    gener = gen.generalizations
+    print("\nGeneralizations applied:", gener)
+    
+    expected_generalizations = {'ranges': {'age': [], 'weight': []}, 'categories': {}, 'untouched': ['height']}
+    print("Expected generalizations:", expected_generalizations)
+    
+    compare_generalizations(gener, expected_generalizations)
+    check_features(features, expected_generalizations, transformed, x)
+    
+    print("\nEnsuring only expected features were modified...")
+    assert ((np.delete(transformed, [0, 2], axis=1) == np.delete(x, [0, 2], axis=1)).all())
+    
+    print("\nComputing the normalized certainty penalty (NCP) score...")
+    ncp = gen.ncp.transform_score
+    print(f"NCP Score: {ncp}")
+    check_ncp(ncp, expected_generalizations)
+    
+    print("\nEvaluating model accuracy after generalization...")
+    rel_accuracy = model.score(ArrayDataset(transformed.astype(np.float32), predictions))
+    print(f"Relative accuracy after transformation: {rel_accuracy}")
+    assert ((rel_accuracy >= target_accuracy) or (target_accuracy - rel_accuracy) <= ACCURACY_DIFF)
+    
+    print("\nTest completed successfully!\n")
